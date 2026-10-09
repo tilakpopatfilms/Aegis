@@ -1,0 +1,89 @@
+{
+  "entities": {
+    "UsernameClaim": {
+      "title": "Username Claim",
+      "description": "Atomic reservation of unique usernames",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "description": "User ID owning the username", "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Reservation timestamp" }
+      },
+      "required": ["uid", "createdAt"]
+    },
+    "PublicProfile": {
+      "title": "Public Profile",
+      "description": "Public user profile and identity keys",
+      "type": "object",
+      "properties": {
+        "username": { "type": "string", "maxLength": 30, "pattern": "^[a-z0-9_.-]+$" },
+        "fullName": { "type": "string", "maxLength": 100 },
+        "photoURL": { "type": "string", "maxLength": 500 },
+        "accountType": { "type": "string", "enum": ["public", "private"] },
+        "publicKey": { "type": "string", "maxLength": 500, "description": "Base64 Ed25519 identity key" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["username", "fullName", "accountType", "publicKey", "createdAt"]
+    },
+    "Prekeys": {
+      "title": "Public Prekeys",
+      "description": "Public prekeys for initial E2EE key exchange",
+      "type": "object",
+      "properties": {
+        "signedPrekey": { "type": "string", "maxLength": 500 },
+        "signedPrekeySignature": { "type": "string", "maxLength": 500 },
+        "oneTimePrekeys": { "type": "array", "description": "List of base64 one-time prekeys" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["signedPrekey", "signedPrekeySignature", "updatedAt"]
+    },
+    "Conversation": {
+      "title": "Conversation",
+      "description": "Shared metadata for 1-on-1 private messaging",
+      "type": "object",
+      "properties": {
+        "participants": { "type": "array", "description": "Array of user UIDs in conversation" },
+        "ephemeralSetting": { "type": "string", "enum": ["off", "viewed", "1h", "24h", "7d"] },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["participants", "ephemeralSetting", "createdAt", "updatedAt"]
+    },
+    "Message": {
+      "title": "Encrypted Message Payload",
+      "description": "Temporary store-and-forward ciphertext",
+      "type": "object",
+      "properties": {
+        "conversationId": { "type": "string", "maxLength": 128 },
+        "senderUid": { "type": "string", "maxLength": 128 },
+        "recipientUid": { "type": "string", "maxLength": 128 },
+        "ciphertext": { "type": "string", "maxLength": 100000, "description": "Encrypted message payload base64" },
+        "ephemeralType": { "type": "string", "enum": ["off", "viewed", "1h", "24h", "7d"] },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "expiresAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["conversationId", "senderUid", "recipientUid", "ciphertext", "ephemeralType", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/usernames/{username}": {
+      "schema": { "$ref": "#/entities/UsernameClaim" },
+      "description": "Registry for ensuring unique usernames"
+    },
+    "/public_profiles/{uid}": {
+      "schema": { "$ref": "#/entities/PublicProfile" },
+      "description": "User public directory and E2EE identity keys"
+    },
+    "/prekeys/{uid}": {
+      "schema": { "$ref": "#/entities/Prekeys" },
+      "description": "Signed E2EE prekeys for session establishment"
+    },
+    "/conversations/{conversationId}": {
+      "schema": { "$ref": "#/entities/Conversation" },
+      "description": "1-on-1 chat metadata"
+    },
+    "/messages/{messageId}": {
+      "schema": { "$ref": "#/entities/Message" },
+      "description": "Temporary encrypted store-and-forward message payloads"
+    }
+  }
+}

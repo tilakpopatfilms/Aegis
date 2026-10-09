@@ -1,0 +1,54 @@
+@import "tailwindcss";
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+:root {
+  --app-bg: #ffffff;
+  --app-card: #f7f7f8;
+  --app-border: #e5e5e7;
+  --app-text: #111827;
+  --app-muted: #6b7280;
+  --bubble-out: #18181b;
+  --bubble-out-text: #ffffff;
+  --bubble-in: #f4f4f5;
+  --bubble-in-text: #09090b;
+}
+
+.dark {
+  --app-bg: #09090b;
+  --app-card: #121215;
+  --app-border: #27272a;
+  --app-text: #f4f4f5;
+  --app-muted: #a1a1aa;
+  --bubble-out: #27272a;
+  --bubble-out-text: #ffffff;
+  --bubble-in: #18181b;
+  --bubble-in-text: #f4f4f5;
+}
+
+html, body, #root {
+  height: 100%;
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Subtle clean scrollbars */
+::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(160, 160, 160, 0.25);
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(160, 160, 160, 0.5);
+}

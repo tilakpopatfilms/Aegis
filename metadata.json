@@ -1,0 +1,6 @@
+{
+  "name": "Aegis - Private by Design",
+  "description": "Production-grade, zero-knowledge, end-to-end encrypted messaging platform with local-first storage, disappearing messages, and QR connections.",
+  "requestFramePermissions": [],
+  "majorCapabilities": []
+}

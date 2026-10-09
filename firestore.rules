@@ -1,0 +1,90 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Default deny catch-all
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isUser(uid) {
+      return !isSignedIn() || request.auth.uid == uid;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    // --- USERNAMES COLLECTION ---
+    match /usernames/{username} {
+      allow get, list: if true;
+      allow create: if isValidId(username)
+        && incoming().keys().hasAll(['uid', 'createdAt'])
+        && incoming().uid is string;
+      allow update, delete: if false;
+    }
+
+    // --- USER CREDENTIALS (Salted PBKDF2 auth for zero-knowledge verify) ---
+    match /user_credentials/{username} {
+      allow get, list: if true;
+      allow create: if isValidId(username)
+        && incoming().keys().hasAll(['username', 'uid', 'passwordHash', 'salt', 'createdAt']);
+      allow update: if isValidId(username);
+      allow delete: if false;
+    }
+
+    // --- PUBLIC PROFILES COLLECTION ---
+    match /public_profiles/{uid} {
+      function isValidProfile(data) {
+        return data.keys().hasAll(['username', 'fullName', 'accountType', 'publicKey', 'createdAt'])
+          && data.username is string && data.username.size() >= 3 && data.username.size() <= 30
+          && data.fullName is string && data.fullName.size() >= 1 && data.fullName.size() <= 100
+          && data.accountType in ['public', 'private']
+          && data.publicKey is string && data.publicKey.size() >= 10 && data.publicKey.size() <= 2000;
+      }
+
+      allow get, list: if true;
+      allow create, update: if isValidId(uid) && isValidProfile(incoming());
+      allow delete: if false;
+    }
+
+    // --- PREKEYS COLLECTION ---
+    match /prekeys/{uid} {
+      allow get, list: if true;
+      allow create, update: if isValidId(uid);
+      allow delete: if false;
+    }
+
+    // --- CONVERSATIONS COLLECTION ---
+    match /conversations/{conversationId} {
+      allow get, list: if true;
+      allow create: if isValidId(conversationId)
+        && incoming().keys().hasAll(['participants', 'ephemeralSetting', 'createdAt', 'updatedAt'])
+        && incoming().participants is list
+        && incoming().participants.size() == 2;
+      allow update, delete: if isValidId(conversationId);
+    }
+
+    // --- MESSAGES COLLECTION ---
+    match /messages/{messageId} {
+      allow get, list: if true;
+      allow create: if isValidId(messageId)
+        && incoming().keys().hasAll(['conversationId', 'senderUid', 'recipientUid', 'ciphertext', 'ephemeralType', 'createdAt'])
+        && incoming().ciphertext is string
+        && incoming().ciphertext.size() <= 200000;
+      allow update, delete: if isValidId(messageId);
+    }
+  }
+}
