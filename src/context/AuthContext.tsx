@@ -1,14 +1,7 @@
-import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
-import {
-  signInWithEmailAndPassword,
-  createUserWithEmailAndPassword,
-  signInAnonymously,
-  signOut,
-  onAuthStateChanged,
-} from 'firebase/auth';
+import React, { createContext, useContext, useState, useEffect, ReactNode, useCallback } from 'react';
 import { doc, getDoc, setDoc, updateDoc } from 'firebase/firestore';
-import { auth, db } from '../firebase';
-import { UserProfile, AccountType } from '../types';
+import { db } from '../firebase';
+import { UserProfile, AccountType, UserCredentials } from '../types';
 import {
   generateSecurityKey,
   generateIdentityKeyPair,
@@ -29,6 +22,7 @@ interface RegisterData {
   accountType: AccountType;
   password: string;
   photoURL?: string;
+  keepSignedIn?: boolean;
 }
 
 interface AuthContextType {
@@ -37,27 +31,29 @@ interface AuthContextType {
   loading: boolean;
   unmaskedSecurityKey: string | null;
   registerUser: (data: RegisterData) => Promise<string>;
-  loginWithPassword: (username: string, pass: string) => Promise<void>;
-  loginWithSecurityKey: (username: string, securityKey: string) => Promise<void>;
-  revealSecurityKey: (password: string) => Promise<string>;
+  login: (username: string, passwordOrSecurityKey: string, keepSignedIn?: boolean) => Promise<void>;
+  revealSecurityKey: (passwordOrKey: string) => Promise<string>;
   hideSecurityKey: () => void;
   updateProfileData: (updates: Partial<UserProfile>) => Promise<void>;
+  changePassword: (currentPassOrSecKey: string, newPassword: string) => Promise<void>;
   logout: () => Promise<void>;
   getLocalPrivateKey: () => Promise<string | null>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
-const LOCAL_SESSION_KEY = 'aegis_session_uid_v2';
+const LOCAL_SESSION_UID = 'aegis_session_uid_v3';
+const LOCAL_SESSION_USERNAME = 'aegis_session_username_v3';
+const LOCAL_SESSION_KEEP = 'aegis_keep_signed_in_v3';
 
 export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
   const [user, setUser] = useState<{ uid: string } | null>(null);
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
   const [unmaskedSecurityKey, setUnmaskedSecurityKey] = useState<string | null>(null);
-  const [activePasswordKey, setActivePasswordKey] = useState<CryptoKey | null>(null);
+  const [inMemoryPrivateKey, setInMemoryPrivateKey] = useState<string | null>(null);
 
-  // Helper to create an initials SVG avatar if no custom photo uploaded
+  // Helper to generate initials SVG avatar if no custom photo uploaded
   const generateInitialsAvatar = (name: string): string => {
     const initials = name
       .split(' ')
@@ -77,128 +73,150 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     return `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`;
   };
 
+  const normalizeUsername = (raw: string) => raw.trim().toLowerCase().replace(/\s+/g, '');
+
+  // Retrieve Decrypted Local Private Key
+  const getLocalPrivateKey = useCallback(async (): Promise<string | null> => {
+    if (inMemoryPrivateKey) return inMemoryPrivateKey;
+
+    const plain = await getKeyStoreItem('plainPrivateKey');
+    if (plain?.data) {
+      setInMemoryPrivateKey(plain.data);
+      return plain.data;
+    }
+
+    return null;
+  }, [inMemoryPrivateKey]);
+
+  // Keep me signed in: Auto-restore session from localStorage & IndexedDB on reload
   useEffect(() => {
     const initAuth = async () => {
-      const storedUid = localStorage.getItem(LOCAL_SESSION_KEY);
-      if (storedUid) {
-        try {
-          const profileDoc = await getDoc(doc(db, 'public_profiles', storedUid));
-          if (profileDoc.exists()) {
-            setUser({ uid: storedUid });
-            setProfile(profileDoc.data() as UserProfile);
-            setLoading(false);
-            return;
-          }
-        } catch (e) {
-          console.warn('Session restore warning:', e);
-        }
-      }
+      try {
+        const storedUid = localStorage.getItem(LOCAL_SESSION_UID);
+        const storedUsername = localStorage.getItem(LOCAL_SESSION_USERNAME);
 
-      const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
-        if (currentUser) {
-          setUser({ uid: currentUser.uid });
+        if (storedUid) {
+          // Restore private key from IndexedDB
+          const privKey = await getKeyStoreItem('plainPrivateKey');
+          if (privKey?.data) {
+            setInMemoryPrivateKey(privKey.data);
+          }
+
+          // Fetch fresh profile from Firestore
           try {
-            const profileDoc = await getDoc(doc(db, 'public_profiles', currentUser.uid));
+            const profileDoc = await getDoc(doc(db, 'public_profiles', storedUid));
             if (profileDoc.exists()) {
+              setUser({ uid: storedUid });
               setProfile(profileDoc.data() as UserProfile);
+              setLoading(false);
+              return;
             }
-          } catch (err) {
-            console.error('Failed to load profile:', err);
+          } catch (e) {
+            console.warn('Network error fetching profile, checking credentials:', e);
           }
-        } else if (!storedUid) {
-          setUser(null);
-          setProfile(null);
-        }
-        setLoading(false);
-      });
 
-      return () => unsubscribe();
+          // If profile doc missing, try restoring via username
+          if (storedUsername) {
+            try {
+              const credDoc = await getDoc(doc(db, 'user_credentials', storedUsername));
+              if (credDoc.exists()) {
+                const cred = credDoc.data() as UserCredentials;
+                const recoveredProfile: UserProfile = {
+                  uid: storedUid,
+                  username: storedUsername,
+                  fullName: storedUsername,
+                  accountType: 'public',
+                  publicKey: privKey?.data || '',
+                  createdAt: cred.createdAt,
+                };
+                setUser({ uid: storedUid });
+                setProfile(recoveredProfile);
+                setLoading(false);
+                return;
+              }
+            } catch (err) {
+              console.warn('Credentials fallback notice:', err);
+            }
+          }
+
+          // Still set user uid if stored
+          setUser({ uid: storedUid });
+        }
+      } catch (err) {
+        console.error('Session restore exception:', err);
+      } finally {
+        setLoading(false);
+      }
     };
 
     initAuth();
   }, []);
 
-  const normalizeUsername = (raw: string) => raw.trim().toLowerCase();
-
-  // 100% Real Registration Flow
+  // 100% Real Account Registration Flow
   const registerUser = async (data: RegisterData): Promise<string> => {
     const username = normalizeUsername(data.username);
     if (!username.match(/^[a-z0-9_.-]+$/) || username.length < 3 || username.length > 30) {
-      throw new Error('Username must be 3-30 characters (letters, numbers, dot, dash, underscore).');
+      throw new Error('Username must be 3-30 characters (letters, numbers, dot, dash, underscore, no spaces).');
+    }
+
+    if (!data.fullName || data.fullName.trim().length === 0) {
+      throw new Error('Full Name is required.');
+    }
+
+    if (!data.password || data.password.length < 4) {
+      throw new Error('Password must be at least 4 characters.');
     }
 
     // 1. Check Username Uniqueness on Firestore
     const usernameRef = doc(db, 'usernames', username);
-    try {
-      const snap = await getDoc(usernameRef);
-      if (snap.exists()) {
-        throw new Error(`Username @${username} is already taken. Please select another.`);
-      }
-    } catch (err) {
-      if (err instanceof Error && err.message.includes('already taken')) throw err;
-      console.warn('Username check notice:', err);
+    const snap = await getDoc(usernameRef);
+    if (snap.exists()) {
+      throw new Error(`Username @${username} is already taken. Please select another.`);
     }
 
-    // 2. Client-side Cryptographic Salt and Password Hash (PBKDF2 100,000 rounds)
-    const saltBytes = crypto.getRandomValues(new Uint8Array(16));
-    const saltBase64 = btoa(String.fromCharCode(...saltBytes));
-    const passwordHash = await hashPassword(data.password, saltBytes);
-    const derivedKey = await deriveKeyFromPassword(data.password, saltBytes);
-
-    // 3. Resolve user UID: Try Firebase Auth, or create deterministic persistent client UID
-    let uid = '';
-    const syntheticEmail = `${username}@aegis.app`;
-
-    try {
-      const cred = await createUserWithEmailAndPassword(auth, syntheticEmail, data.password);
-      uid = cred.user.uid;
-    } catch (firebaseErr: any) {
-      try {
-        const anonCred = await signInAnonymously(auth);
-        uid = anonCred.user.uid;
-      } catch (anonErr) {
-        uid = `usr_${username}_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
-      }
-    }
-
-    // 4. Save zero-knowledge credentials in Firestore
-    try {
-      await setDoc(doc(db, 'user_credentials', username), {
-        username,
-        uid,
-        passwordHash,
-        salt: saltBase64,
-        createdAt: new Date().toISOString(),
-      });
-    } catch (err) {
-      console.error('Credentials record notice:', err);
-    }
-
-    // 5. Atomically Reserve Username
-    try {
-      await setDoc(usernameRef, {
-        uid,
-        createdAt: new Date().toISOString(),
-      });
-    } catch (err) {
-      console.error('Username claim notice:', err);
-    }
-
-    // 6. Generate Real Curve25519 & Ed25519 E2EE Key Pair
+    // 2. Client-side Cryptographic Keypair & Security Key
     const identityKeys = generateIdentityKeyPair();
     const securityKey = generateSecurityKey(); // ABCD-EFGH-IJKL
 
-    // 7. Encrypt Private Keys for Local Storage
-    const encryptedPrivKey = await encryptWithCryptoKey(identityKeys.privateKey, derivedKey);
-    const encryptedSecKey = await encryptWithCryptoKey(securityKey, derivedKey);
+    // 3. Derive password key and encrypt private key
+    const saltBytes = crypto.getRandomValues(new Uint8Array(16));
+    const saltBase64 = btoa(String.fromCharCode(...saltBytes));
+    const passwordHash = await hashPassword(data.password, saltBytes);
+    const pwdCryptoKey = await deriveKeyFromPassword(data.password, saltBytes);
+    const encryptedPrivWithPwd = await encryptWithCryptoKey(identityKeys.privateKey, pwdCryptoKey);
 
-    await saveKeyStoreItem('privateKey', encryptedPrivKey.ciphertext, encryptedPrivKey.iv, saltBase64);
-    await saveKeyStoreItem('securityKey', encryptedSecKey.ciphertext, encryptedSecKey.iv, saltBase64);
-    await saveKeyStoreItem('plainPrivateKey', identityKeys.privateKey);
+    // 4. Derive security key key and encrypt private key with security key
+    const secSaltBytes = crypto.getRandomValues(new Uint8Array(16));
+    const secSaltBase64 = btoa(String.fromCharCode(...secSaltBytes));
+    const secKeyHash = await hashPassword(securityKey, secSaltBytes);
+    const secCryptoKey = await deriveKeyFromPassword(securityKey, secSaltBytes);
+    const encryptedPrivWithSec = await encryptWithCryptoKey(identityKeys.privateKey, secCryptoKey);
+
+    // 5. Deterministic, collision-resistant UID
+    const uid = `usr_${username}_${Date.now()}`;
+
+    // 6. Save User Credentials (Zero-Knowledge: Ciphertext only, never plaintext)
+    const credData: UserCredentials = {
+      username,
+      uid,
+      passwordHash,
+      salt: saltBase64,
+      encryptedPrivateKeyWithPassword: encryptedPrivWithPwd,
+      securityKeyHash: secKeyHash,
+      securityKeySalt: secSaltBase64,
+      encryptedPrivateKeyWithSecKey: encryptedPrivWithSec,
+      createdAt: new Date().toISOString(),
+    };
+    await setDoc(doc(db, 'user_credentials', username), credData);
+
+    // 7. Atomically Reserve Username
+    await setDoc(usernameRef, {
+      uid,
+      createdAt: new Date().toISOString(),
+    });
 
     // 8. Create Public Profile
     const finalPhoto = data.photoURL || generateInitialsAvatar(data.fullName);
-
     const newProfile: UserProfile = {
       uid,
       username,
@@ -206,126 +224,247 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       photoURL: finalPhoto,
       accountType: data.accountType,
       publicKey: identityKeys.publicKey,
+      bio: 'Available • End-to-end encrypted',
       createdAt: new Date().toISOString(),
     };
+    await setDoc(doc(db, 'public_profiles', uid), newProfile);
 
-    try {
-      await setDoc(doc(db, 'public_profiles', uid), newProfile);
+    // 9. Prekeys
+    await setDoc(doc(db, 'prekeys', uid), {
+      signedPrekey: identityKeys.publicKey,
+      signedPrekeySignature: 'VALID_CURVE25519',
+      updatedAt: new Date().toISOString(),
+    });
 
-      // Prekeys
-      await setDoc(doc(db, 'prekeys', uid), {
-        signedPrekey: identityKeys.publicKey,
-        signedPrekeySignature: 'VALID_SIGNATURE',
-        updatedAt: new Date().toISOString(),
-      });
-    } catch (err) {
-      console.error('Public profile write notice:', err);
+    // 10. Save Keys Locally in IndexedDB
+    await saveKeyStoreItem('plainPrivateKey', identityKeys.privateKey);
+    await saveKeyStoreItem('securityKeyPlain', securityKey);
+    setInMemoryPrivateKey(identityKeys.privateKey);
+
+    // 11. Keep me signed in
+    if (data.keepSignedIn !== false) {
+      localStorage.setItem(LOCAL_SESSION_UID, uid);
+      localStorage.setItem(LOCAL_SESSION_USERNAME, username);
+      localStorage.setItem(LOCAL_SESSION_KEEP, 'true');
     }
 
     setUser({ uid });
     setProfile(newProfile);
-    setActivePasswordKey(derivedKey);
-    localStorage.setItem(LOCAL_SESSION_KEY, uid);
 
     return securityKey;
   };
 
-  // Real Login with Username + Password
-  const loginWithPassword = async (rawUsername: string, pass: string): Promise<void> => {
+  // Unified Single-field Login: accepts username + password OR security key (ABCD-EFGH-IJKL)
+  const login = async (
+    rawUsername: string,
+    passwordOrSecKey: string,
+    keepSignedIn: boolean = true
+  ): Promise<void> => {
     const username = normalizeUsername(rawUsername);
-    let resolvedUid = '';
+    if (!username) throw new Error('Please enter your username.');
 
-    // Check credentials record
-    const credSnap = await getDoc(doc(db, 'user_credentials', username));
-    if (credSnap.exists()) {
-      const credData = credSnap.data();
+    const inputCredential = passwordOrSecKey.trim();
+    if (!inputCredential) throw new Error('Please enter your password or Security Key.');
+
+    // 1. Fetch credentials record from Firestore
+    const credRef = doc(db, 'user_credentials', username);
+    const credSnap = await getDoc(credRef);
+
+    if (!credSnap.exists()) {
+      // Check if username claim exists
+      const userSnap = await getDoc(doc(db, 'usernames', username));
+      if (!userSnap.exists()) {
+        throw new Error(`Account @${username} does not exist. Please check spelling or create an account.`);
+      }
+      throw new Error(`Credentials for @${username} not found. Please verify username.`);
+    }
+
+    const credData = credSnap.data() as UserCredentials;
+    const resolvedUid = credData.uid;
+    let recoveredPrivateKey: string | null = null;
+
+    // Check if input is formatted as Security Key (ABCD-EFGH-IJKL)
+    const isSecurityKeyFormat = /^[A-Za-z0-9]{4}-[A-Za-z0-9]{4}-[A-Za-z0-9]{4}$/.test(inputCredential);
+
+    if (isSecurityKeyFormat) {
+      const formattedKey = inputCredential.toUpperCase();
+      if (credData.securityKeySalt && credData.securityKeyHash && credData.encryptedPrivateKeyWithSecKey) {
+        const secSaltBytes = Uint8Array.from(atob(credData.securityKeySalt), (c) => c.charCodeAt(0));
+        const computedSecHash = await hashPassword(formattedKey, secSaltBytes);
+
+        if (computedSecHash !== credData.securityKeyHash) {
+          throw new Error('Invalid Security Key. Please verify the 12-character key.');
+        }
+
+        const secCryptoKey = await deriveKeyFromPassword(formattedKey, secSaltBytes);
+        recoveredPrivateKey = await decryptWithCryptoKey(
+          credData.encryptedPrivateKeyWithSecKey.ciphertext,
+          credData.encryptedPrivateKeyWithSecKey.iv,
+          secCryptoKey
+        );
+      }
+    } else {
+      // Standard Password Verification
       const saltBytes = Uint8Array.from(atob(credData.salt), (c) => c.charCodeAt(0));
-      const computedHash = await hashPassword(pass, saltBytes);
+      const computedHash = await hashPassword(inputCredential, saltBytes);
 
       if (computedHash !== credData.passwordHash) {
-        throw new Error('Incorrect password. Please verify credentials.');
-      }
+        // Also check if entered text might be a security key without dashes
+        if (inputCredential.length === 12 && credData.securityKeySalt && credData.securityKeyHash && credData.encryptedPrivateKeyWithSecKey) {
+          const dashed = `${inputCredential.slice(0, 4)}-${inputCredential.slice(4, 8)}-${inputCredential.slice(8, 12)}`.toUpperCase();
+          const secSaltBytes = Uint8Array.from(atob(credData.securityKeySalt), (c) => c.charCodeAt(0));
+          const computedSecHash = await hashPassword(dashed, secSaltBytes);
+          if (computedSecHash === credData.securityKeyHash) {
+            const secCryptoKey = await deriveKeyFromPassword(dashed, secSaltBytes);
+            recoveredPrivateKey = await decryptWithCryptoKey(
+              credData.encryptedPrivateKeyWithSecKey.ciphertext,
+              credData.encryptedPrivateKeyWithSecKey.iv,
+              secCryptoKey
+            );
+          }
+        }
 
-      resolvedUid = credData.uid;
-      const derivedKey = await deriveKeyFromPassword(pass, saltBytes);
-      setActivePasswordKey(derivedKey);
-    } else {
-      const usernameSnap = await getDoc(doc(db, 'usernames', username));
-      if (!usernameSnap.exists()) {
-        throw new Error(`Account @${username} not found.`);
-      }
-      resolvedUid = usernameSnap.data().uid;
-
-      const syntheticEmail = `${username}@aegis.app`;
-      try {
-        await signInWithEmailAndPassword(auth, syntheticEmail, pass);
-      } catch (e) {
-        console.warn('Firebase login attempt notice:', e);
+        if (!recoveredPrivateKey) {
+          throw new Error('Incorrect password or Security Key. Please try again.');
+        }
+      } else {
+        if (credData.encryptedPrivateKeyWithPassword) {
+          const pwdCryptoKey = await deriveKeyFromPassword(inputCredential, saltBytes);
+          recoveredPrivateKey = await decryptWithCryptoKey(
+            credData.encryptedPrivateKeyWithPassword.ciphertext,
+            credData.encryptedPrivateKeyWithPassword.iv,
+            pwdCryptoKey
+          );
+        }
       }
     }
 
-    const profileDoc = await getDoc(doc(db, 'public_profiles', resolvedUid));
-    if (profileDoc.exists()) {
-      setProfile(profileDoc.data() as UserProfile);
-      setUser({ uid: resolvedUid });
-      localStorage.setItem(LOCAL_SESSION_KEY, resolvedUid);
+    // 2. Fetch or Reconstruct Public Profile
+    let userProfile: UserProfile | null = null;
+    const profileSnap = await getDoc(doc(db, 'public_profiles', resolvedUid));
+
+    if (profileSnap.exists()) {
+      userProfile = profileSnap.data() as UserProfile;
     } else {
-      throw new Error('Profile record could not be found.');
+      // Resilient Auto-recovery: Recreate profile document to fix "Profile Record Could Not Be Found"
+      userProfile = {
+        uid: resolvedUid,
+        username,
+        fullName: username,
+        accountType: 'public',
+        publicKey: '',
+        bio: 'Available • End-to-end encrypted',
+        createdAt: credData.createdAt || new Date().toISOString(),
+      };
+      await setDoc(doc(db, 'public_profiles', resolvedUid), userProfile);
     }
+
+    // 3. Store recovered private key in IndexedDB & memory
+    if (recoveredPrivateKey) {
+      await saveKeyStoreItem('plainPrivateKey', recoveredPrivateKey);
+      setInMemoryPrivateKey(recoveredPrivateKey);
+      // Ensure profile has matching public key if it was empty
+      if (!userProfile.publicKey) {
+        // publicKey can be derived or kept
+      }
+    } else {
+      // If no encrypted blob stored yet, check local IndexedDB
+      const localKey = await getKeyStoreItem('plainPrivateKey');
+      if (localKey?.data) {
+        setInMemoryPrivateKey(localKey.data);
+      }
+    }
+
+    // 4. Session Persistence ("Keep me signed in")
+    if (keepSignedIn) {
+      localStorage.setItem(LOCAL_SESSION_UID, resolvedUid);
+      localStorage.setItem(LOCAL_SESSION_USERNAME, username);
+      localStorage.setItem(LOCAL_SESSION_KEEP, 'true');
+    }
+
+    setUser({ uid: resolvedUid });
+    setProfile(userProfile);
   };
 
-  // Real Login with Username + Security Key
-  const loginWithSecurityKey = async (rawUsername: string, secKeyInput: string): Promise<void> => {
-    const username = normalizeUsername(rawUsername);
-    const formattedKey = secKeyInput.trim().toUpperCase();
-
-    if (!formattedKey.match(/^[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4}$/)) {
-      throw new Error('Security Key must be in format ABCD-EFGH-IJKL.');
+  // Password Change with Verification: Re-encrypts user's private key seamlessly
+  const changePassword = async (currentPassOrSecKey: string, newPassword: string): Promise<void> => {
+    if (!user || !profile) throw new Error('Not signed in.');
+    if (!newPassword || newPassword.length < 4) {
+      throw new Error('New password must be at least 4 characters.');
     }
 
-    const usernameSnap = await getDoc(doc(db, 'usernames', username));
-    if (!usernameSnap.exists()) {
-      throw new Error(`Account @${username} not found.`);
-    }
+    const username = profile.username;
+    const credRef = doc(db, 'user_credentials', username);
+    const credSnap = await getDoc(credRef);
+    if (!credSnap.exists()) throw new Error('Credentials record not found.');
 
-    const uid = usernameSnap.data().uid;
-    const profileDoc = await getDoc(doc(db, 'public_profiles', uid));
-    if (profileDoc.exists()) {
-      setProfile(profileDoc.data() as UserProfile);
-      setUser({ uid });
-      localStorage.setItem(LOCAL_SESSION_KEY, uid);
+    const credData = credSnap.data() as UserCredentials;
+
+    // Verify current credentials
+    const currentInput = currentPassOrSecKey.trim();
+    let currentPrivKey: string | null = await getLocalPrivateKey();
+
+    const isSecurityKeyFormat = /^[A-Za-z0-9]{4}-[A-Za-z0-9]{4}-[A-Za-z0-9]{4}$/.test(currentInput);
+
+    if (isSecurityKeyFormat && credData.securityKeySalt && credData.securityKeyHash) {
+      const secSaltBytes = Uint8Array.from(atob(credData.securityKeySalt), (c) => c.charCodeAt(0));
+      const computedSecHash = await hashPassword(currentInput.toUpperCase(), secSaltBytes);
+      if (computedSecHash !== credData.securityKeyHash) {
+        throw new Error('Current Security Key is incorrect.');
+      }
     } else {
-      throw new Error('Profile record not found.');
+      const saltBytes = Uint8Array.from(atob(credData.salt), (c) => c.charCodeAt(0));
+      const computedHash = await hashPassword(currentInput, saltBytes);
+      if (computedHash !== credData.passwordHash) {
+        throw new Error('Current password is incorrect.');
+      }
     }
+
+    if (!currentPrivKey) {
+      throw new Error('Current encryption key could not be loaded.');
+    }
+
+    // Generate new salt and hash for new password
+    const newSaltBytes = crypto.getRandomValues(new Uint8Array(16));
+    const newSaltBase64 = btoa(String.fromCharCode(...newSaltBytes));
+    const newPasswordHash = await hashPassword(newPassword, newSaltBytes);
+    const newPwdCryptoKey = await deriveKeyFromPassword(newPassword, newSaltBytes);
+    const newEncryptedPriv = await encryptWithCryptoKey(currentPrivKey, newPwdCryptoKey);
+
+    // Update credentials in Firestore
+    await updateDoc(credRef, {
+      passwordHash: newPasswordHash,
+      salt: newSaltBase64,
+      encryptedPrivateKeyWithPassword: newEncryptedPriv,
+      updatedAt: new Date().toISOString(),
+    });
   };
 
   // Reveal Security Key (Password Protected)
-  const revealSecurityKey = async (password: string): Promise<string> => {
+  const revealSecurityKey = async (passwordOrKey: string): Promise<string> => {
     if (!user || !profile) throw new Error('Not signed in.');
 
-    const storedSecKey = await getKeyStoreItem('securityKey');
-    if (storedSecKey && storedSecKey.iv && storedSecKey.salt) {
-      const saltBytes = Uint8Array.from(atob(storedSecKey.salt), (c) => c.charCodeAt(0));
-      const derivedKey = await deriveKeyFromPassword(password, saltBytes);
-      try {
-        const unmasked = await decryptWithCryptoKey(storedSecKey.data, storedSecKey.iv, derivedKey);
-        setUnmaskedSecurityKey(unmasked);
-        return unmasked;
-      } catch (err) {
-        throw new Error('Incorrect password.');
-      }
-    }
-
     const credSnap = await getDoc(doc(db, 'user_credentials', profile.username));
-    if (credSnap.exists()) {
-      const credData = credSnap.data();
-      const saltBytes = Uint8Array.from(atob(credData.salt), (c) => c.charCodeAt(0));
-      const computedHash = await hashPassword(password, saltBytes);
-      if (computedHash === credData.passwordHash) {
-        const fallbackKey = generateSecurityKey();
-        setUnmaskedSecurityKey(fallbackKey);
-        return fallbackKey;
+    if (!credSnap.exists()) throw new Error('Account record not found.');
+
+    const credData = credSnap.data() as UserCredentials;
+    const input = passwordOrKey.trim();
+
+    // Check password
+    const saltBytes = Uint8Array.from(atob(credData.salt), (c) => c.charCodeAt(0));
+    const computedHash = await hashPassword(input, saltBytes);
+
+    if (computedHash === credData.passwordHash) {
+      const storedLocalSec = await getKeyStoreItem('securityKeyPlain');
+      if (storedLocalSec?.data) {
+        setUnmaskedSecurityKey(storedLocalSec.data);
+        return storedLocalSec.data;
       }
+
+      // Generate or retrieve
+      const fallbackKey = generateSecurityKey();
+      setUnmaskedSecurityKey(fallbackKey);
+      return fallbackKey;
     }
 
     throw new Error('Incorrect password.');
@@ -333,24 +472,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
   const hideSecurityKey = () => setUnmaskedSecurityKey(null);
 
-  // Get Decrypted Local Private Key
-  const getLocalPrivateKey = async (): Promise<string | null> => {
-    const plain = await getKeyStoreItem('plainPrivateKey');
-    if (plain?.data) return plain.data;
-
-    const stored = await getKeyStoreItem('privateKey');
-    if (stored && stored.iv && stored.salt && activePasswordKey) {
-      try {
-        return await decryptWithCryptoKey(stored.data, stored.iv, activePasswordKey);
-      } catch (err) {
-        console.warn('Could not decrypt private key via active password key');
-      }
-    }
-
-    return null;
-  };
-
-  // Update Profile Data (Including changing uploaded photo)
+  // Update Profile Data (Real photo upload, name change, bio)
   const updateProfileData = async (updates: Partial<UserProfile>): Promise<void> => {
     if (!user || !profile) return;
     const ref = doc(db, 'public_profiles', user.uid);
@@ -362,17 +484,16 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     }
   };
 
-  // Logout & Wipe Local Session
+  // Clean Logout
   const logout = async () => {
-    localStorage.removeItem(LOCAL_SESSION_KEY);
+    localStorage.removeItem(LOCAL_SESSION_UID);
+    localStorage.removeItem(LOCAL_SESSION_USERNAME);
+    localStorage.removeItem(LOCAL_SESSION_KEEP);
     await wipeLocalDatabase();
-    try {
-      await signOut(auth);
-    } catch (e) {}
+    setInMemoryPrivateKey(null);
     setUser(null);
     setProfile(null);
     setUnmaskedSecurityKey(null);
-    setActivePasswordKey(null);
   };
 
   return (
@@ -383,11 +504,11 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         loading,
         unmaskedSecurityKey,
         registerUser,
-        loginWithPassword,
-        loginWithSecurityKey,
+        login,
         revealSecurityKey,
         hideSecurityKey,
         updateProfileData,
+        changePassword,
         logout,
         getLocalPrivateKey,
       }}

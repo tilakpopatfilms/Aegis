@@ -20,17 +20,21 @@ interface AegisDBSchema extends DBSchema {
     key: string;
     value: SafetyNumberInfo;
   };
+  deletedConversations: {
+    key: string;
+    value: { id: string; deletedAt: string };
+  };
 }
 
 const DB_NAME = 'AegisLocalDB';
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 
 let dbPromise: Promise<IDBPDatabase<AegisDBSchema>> | null = null;
 
 export function getLocalDB(): Promise<IDBPDatabase<AegisDBSchema>> {
   if (!dbPromise) {
     dbPromise = openDB<AegisDBSchema>(DB_NAME, DB_VERSION, {
-      upgrade(db) {
+      upgrade(db, oldVersion) {
         // Conversations Store
         if (!db.objectStoreNames.contains('conversations')) {
           const convStore = db.createObjectStore('conversations', { keyPath: 'id' });
@@ -53,6 +57,11 @@ export function getLocalDB(): Promise<IDBPDatabase<AegisDBSchema>> {
         if (!db.objectStoreNames.contains('contacts')) {
           db.createObjectStore('contacts', { keyPath: 'contactUid' });
         }
+
+        // Deleted Conversations Store (prevents resurrected chats)
+        if (!db.objectStoreNames.contains('deletedConversations')) {
+          db.createObjectStore('deletedConversations', { keyPath: 'id' });
+        }
       },
     });
   }
@@ -68,7 +77,6 @@ export async function saveLocalMessage(message: DecryptedMessage): Promise<void>
 export async function getLocalMessages(conversationId: string): Promise<DecryptedMessage[]> {
   const db = await getLocalDB();
   const all = await db.getAllFromIndex('messages', 'by-conversation', conversationId);
-  // Filter out expired messages
   const now = Date.now();
   const valid = all.filter((m) => !m.expiresAtTimestamp || m.expiresAtTimestamp > now);
 
@@ -83,21 +91,69 @@ export async function deleteLocalMessage(messageId: string): Promise<void> {
 // Local Conversations API
 export async function saveLocalConversation(conv: Conversation): Promise<void> {
   const db = await getLocalDB();
+  const isDeleted = await isConversationDeleted(conv.id);
+  if (isDeleted) return; // Do not save if previously deleted
   await db.put('conversations', conv);
 }
 
 export async function getLocalConversations(): Promise<Conversation[]> {
   const db = await getLocalDB();
   const list = await db.getAll('conversations');
-  return list.sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
+  const deletedSet = await getDeletedConversationIds();
+  const filtered = list.filter((c) => !deletedSet.has(c.id));
+  return filtered.sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
 }
 
 export async function getLocalConversation(id: string): Promise<Conversation | undefined> {
   const db = await getLocalDB();
+  const isDeleted = await isConversationDeleted(id);
+  if (isDeleted) return undefined;
   return db.get('conversations', id);
 }
 
+// Deleted Conversations Management (permanently prevents revival upon reload)
+export async function markConversationAsDeleted(id: string): Promise<void> {
+  const db = await getLocalDB();
+  await db.put('deletedConversations', { id, deletedAt: new Date().toISOString() });
+  // Also store in localStorage as immediate cache
+  try {
+    const raw = localStorage.getItem('aegis_deleted_convs') || '[]';
+    const arr: string[] = JSON.parse(raw);
+    if (!arr.includes(id)) {
+      arr.push(id);
+      localStorage.setItem('aegis_deleted_convs', JSON.stringify(arr));
+    }
+  } catch (e) {}
+}
+
+export async function isConversationDeleted(id: string): Promise<boolean> {
+  try {
+    const raw = localStorage.getItem('aegis_deleted_convs') || '[]';
+    const arr: string[] = JSON.parse(raw);
+    if (arr.includes(id)) return true;
+  } catch (e) {}
+
+  const db = await getLocalDB();
+  const entry = await db.get('deletedConversations', id);
+  return !!entry;
+}
+
+export async function getDeletedConversationIds(): Promise<Set<string>> {
+  const set = new Set<string>();
+  try {
+    const raw = localStorage.getItem('aegis_deleted_convs') || '[]';
+    const arr: string[] = JSON.parse(raw);
+    arr.forEach((id) => set.add(id));
+  } catch (e) {}
+
+  const db = await getLocalDB();
+  const entries = await db.getAll('deletedConversations');
+  entries.forEach((e) => set.add(e.id));
+  return set;
+}
+
 export async function deleteLocalConversation(id: string): Promise<void> {
+  await markConversationAsDeleted(id);
   const db = await getLocalDB();
   await db.delete('conversations', id);
   // Delete associated local messages
@@ -153,4 +209,6 @@ export async function wipeLocalDatabase(): Promise<void> {
   await db.clear('conversations');
   await db.clear('keyStore');
   await db.clear('contacts');
+  await db.clear('deletedConversations');
+  localStorage.removeItem('aegis_deleted_convs');
 }

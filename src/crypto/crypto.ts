@@ -12,7 +12,7 @@ function toSafeArrayBuffer(u8: Uint8Array): ArrayBuffer {
 export function generateSecurityKey(): string {
   const bytes = new Uint8Array(12);
   crypto.getRandomValues(bytes);
-  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // Base32 unambiguous charset
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // Unambiguous Base32 charset
   let raw = '';
   for (let i = 0; i < bytes.length; i++) {
     raw += chars[bytes[i] % chars.length];
@@ -20,7 +20,7 @@ export function generateSecurityKey(): string {
   return `${raw.slice(0, 4)}-${raw.slice(4, 8)}-${raw.slice(8, 12)}`;
 }
 
-// Generate Ed25519/Curve25519 Identity Keypair
+// Generate Curve25519 Identity Keypair
 export function generateIdentityKeyPair(): { publicKey: string; privateKey: string } {
   const keyPair = nacl.box.keyPair();
   return {

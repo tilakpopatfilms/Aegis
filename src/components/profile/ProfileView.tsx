@@ -1,30 +1,75 @@
 import React, { useState, useRef } from 'react';
-import { Key, Shield, Eye, Lock, LogOut, Edit2, Smartphone, Check, User, Camera, ShieldCheck, Upload } from 'lucide-react';
+import {
+  Key,
+  Shield,
+  Eye,
+  Camera,
+  Check,
+  Copy,
+  LogOut,
+  Edit2,
+  Lock,
+  Link as LinkIcon,
+  AlertCircle,
+  Smartphone,
+  Save,
+} from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
-import { EphemeralSetting } from '../../types';
 
-interface ProfileViewProps {
-  onOpenSecurityKeyModal: () => void;
-}
+export const ProfileView: React.FC = () => {
+  const {
+    profile,
+    updateProfileData,
+    changePassword,
+    revealSecurityKey,
+    unmaskedSecurityKey,
+    logout,
+  } = useAuth();
 
-export const ProfileView: React.FC<ProfileViewProps> = ({ onOpenSecurityKeyModal }) => {
-  const { profile, updateProfileData, logout } = useAuth();
+  // Full Name Editing
+  const [isEditingName, setIsEditingName] = useState(false);
+  const [nameInput, setNameInput] = useState(profile?.fullName || '');
+  const [nameNotice, setNameNotice] = useState<string | null>(null);
 
+  // Bio Editing
   const [isEditingBio, setIsEditingBio] = useState(false);
   const [bioInput, setBioInput] = useState(profile?.bio || '');
 
-  const [readReceipts, setReadReceipts] = useState(true);
-  const [typingIndicators, setTypingIndicators] = useState(true);
-  const [onlineStatus, setOnlineStatus] = useState(true);
-  const [defaultEphemeral, setDefaultEphemeral] = useState<EphemeralSetting>('off');
+  // Password Change State
+  const [currentPassOrSecKey, setCurrentPassOrSecKey] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmNewPassword, setConfirmNewPassword] = useState('');
+  const [passwordChangeLoading, setPasswordChangeLoading] = useState(false);
+  const [passwordNotice, setPasswordNotice] = useState<string | null>(null);
+  const [passwordError, setPasswordError] = useState<string | null>(null);
 
+  // Security Key Unmasking
+  const [secKeyAuthInput, setSecKeyAuthInput] = useState('');
+  const [showSecKeyAuthModal, setShowSecKeyAuthModal] = useState(false);
+  const [secKeyError, setSecKeyError] = useState<string | null>(null);
+  const [copiedSecKey, setCopiedSecKey] = useState(false);
+
+  // Account Link
+  const [copiedLink, setCopiedLink] = useState(false);
+
+  // Photo Upload
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const [uploadNotice, setUploadNotice] = useState<string | null>(null);
+  const [photoNotice, setPhotoNotice] = useState<string | null>(null);
 
   if (!profile) return null;
 
+  const accountLink = `${window.location.origin}/${profile.username}`;
+
+  const handleSaveName = async () => {
+    if (!nameInput.trim()) return;
+    await updateProfileData({ fullName: nameInput.trim() });
+    setIsEditingName(false);
+    setNameNotice('Name updated successfully.');
+    setTimeout(() => setNameNotice(null), 3000);
+  };
+
   const handleSaveBio = async () => {
-    await updateProfileData({ bio: bioInput });
+    await updateProfileData({ bio: bioInput.trim() });
     setIsEditingBio(false);
   };
 
@@ -32,33 +77,105 @@ export const ProfileView: React.FC<ProfileViewProps> = ({ onOpenSecurityKeyModal
     if (e.target.files && e.target.files[0]) {
       const file = e.target.files[0];
       if (file.size > 2 * 1024 * 1024) {
-        setUploadNotice('Image must be under 2MB.');
+        setPhotoNotice('Image file must be under 2MB.');
         return;
       }
+
       const reader = new FileReader();
       reader.onload = async (event) => {
         const base64 = event.target?.result as string;
         await updateProfileData({ photoURL: base64 });
-        setUploadNotice('Profile photo updated.');
-        setTimeout(() => setUploadNotice(null), 3000);
+        setPhotoNotice('Profile photo updated.');
+        setTimeout(() => setPhotoNotice(null), 3000);
       };
       reader.readAsDataURL(file);
+    }
+  };
+
+  const handlePasswordSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setPasswordNotice(null);
+    setPasswordError(null);
+
+    if (!currentPassOrSecKey.trim()) {
+      setPasswordError('Please enter current password or Security Key.');
+      return;
+    }
+
+    if (newPassword.length < 4) {
+      setPasswordError('New password must be at least 4 characters.');
+      return;
+    }
+
+    if (newPassword !== confirmNewPassword) {
+      setPasswordError('New passwords do not match. Please verify.');
+      return;
+    }
+
+    setPasswordChangeLoading(true);
+    try {
+      await changePassword(currentPassOrSecKey, newPassword);
+      setPasswordNotice('Password changed successfully. Your E2EE keys are re-encrypted.');
+      setCurrentPassOrSecKey('');
+      setNewPassword('');
+      setConfirmNewPassword('');
+    } catch (err: any) {
+      setPasswordError(err.message || 'Failed to update password. Verify current credentials.');
+    } finally {
+      setPasswordChangeLoading(false);
+    }
+  };
+
+  const handleRevealSecurityKey = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSecKeyError(null);
+    try {
+      await revealSecurityKey(secKeyAuthInput);
+      setShowSecKeyAuthModal(false);
+      setSecKeyAuthInput('');
+    } catch (err: any) {
+      setSecKeyError(err.message || 'Incorrect password.');
+    }
+  };
+
+  const handleCopyLink = () => {
+    navigator.clipboard.writeText(accountLink);
+    setCopiedLink(true);
+    setTimeout(() => setCopiedLink(false), 3000);
+  };
+
+  const handleCopySecurityKey = () => {
+    if (unmaskedSecurityKey) {
+      navigator.clipboard.writeText(unmaskedSecurityKey);
+      setCopiedSecKey(true);
+      setTimeout(() => setCopiedSecKey(false), 3000);
     }
   };
 
   const initials = profile.fullName
     ? profile.fullName
         .split(' ')
+        .filter(Boolean)
         .map((p) => p[0])
         .join('')
         .toUpperCase()
         .slice(0, 2)
-    : 'A';
+    : 'U';
+
+  const hasCustomPhoto = profile.photoURL && !profile.photoURL.startsWith('data:image/svg+xml;utf8');
 
   return (
-    <div className="flex-1 overflow-y-auto p-4 md:p-8 bg-white dark:bg-[#09090b] max-w-2xl mx-auto space-y-6 text-neutral-900 dark:text-neutral-100">
-      {/* Profile Card */}
-      <div className="p-6 bg-neutral-50 dark:bg-[#121215] rounded-2xl border border-neutral-200 dark:border-neutral-800 space-y-4">
+    <div className="flex-1 h-full overflow-y-auto p-4 sm:p-8 bg-white dark:bg-[#09090b] text-neutral-900 dark:text-neutral-100 max-w-2xl mx-auto space-y-6">
+      {/* Header */}
+      <div className="pb-3 border-b border-neutral-200 dark:border-neutral-800">
+        <h1 className="text-xl font-bold tracking-tight">Profile & Account Settings</h1>
+        <p className="text-xs text-neutral-500 dark:text-neutral-400">
+          Manage your personal details, custom link, password, and E2EE recovery key
+        </p>
+      </div>
+
+      {/* Main Profile Info Card */}
+      <div className="p-6 bg-neutral-50 dark:bg-[#121215] rounded-3xl border border-neutral-200 dark:border-neutral-800 space-y-5">
         <input
           type="file"
           ref={fileInputRef}
@@ -68,8 +185,11 @@ export const ProfileView: React.FC<ProfileViewProps> = ({ onOpenSecurityKeyModal
         />
 
         <div className="flex items-center space-x-4">
-          <div className="relative group cursor-pointer" onClick={() => fileInputRef.current?.click()}>
-            {profile.photoURL && !profile.photoURL.startsWith('data:image/svg+xml;utf8') ? (
+          <div
+            className="relative group cursor-pointer shrink-0"
+            onClick={() => fileInputRef.current?.click()}
+          >
+            {hasCustomPhoto ? (
               <img
                 src={profile.photoURL}
                 alt={profile.fullName}
@@ -86,32 +206,65 @@ export const ProfileView: React.FC<ProfileViewProps> = ({ onOpenSecurityKeyModal
           </div>
 
           <div className="flex-1 min-w-0">
-            <h2 className="text-lg font-bold truncate">{profile.fullName}</h2>
-            <p className="text-xs text-neutral-500 font-mono truncate">@{profile.username}</p>
-            <div className="flex items-center space-x-2 mt-1">
-              <span className="px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider bg-neutral-200 dark:bg-neutral-800 text-neutral-700 dark:text-neutral-300">
-                {profile.accountType} Account
-              </span>
-              <button
-                type="button"
-                onClick={() => fileInputRef.current?.click()}
-                className="text-[11px] text-neutral-500 hover:text-neutral-900 dark:hover:text-white underline"
-              >
-                Change photo
-              </button>
-            </div>
+            {isEditingName ? (
+              <div className="flex items-center space-x-2">
+                <input
+                  type="text"
+                  value={nameInput}
+                  onChange={(e) => setNameInput(e.target.value)}
+                  className="px-3 py-1.5 bg-white dark:bg-[#18181b] border border-neutral-300 dark:border-neutral-700 rounded-xl text-xs font-semibold focus:outline-none"
+                  autoFocus
+                />
+                <button
+                  onClick={handleSaveName}
+                  className="px-3 py-1.5 bg-neutral-900 dark:bg-white text-white dark:text-neutral-900 rounded-xl text-xs font-bold shadow-xs flex items-center space-x-1"
+                >
+                  <Save className="w-3.5 h-3.5" />
+                  <span>Save</span>
+                </button>
+              </div>
+            ) : (
+              <div className="flex items-center space-x-2">
+                <h2 className="text-lg font-bold truncate">{profile.fullName}</h2>
+                <button
+                  onClick={() => {
+                    setNameInput(profile.fullName);
+                    setIsEditingName(true);
+                  }}
+                  className="p-1 text-neutral-400 hover:text-neutral-900 dark:hover:text-white"
+                  title="Edit Name"
+                >
+                  <Edit2 className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            )}
+
+            <p className="text-xs text-neutral-500 font-mono mt-0.5">@{profile.username}</p>
+
+            <button
+              onClick={() => fileInputRef.current?.click()}
+              className="text-[11px] font-semibold text-neutral-500 hover:text-neutral-900 dark:hover:text-white mt-1 underline"
+            >
+              Upload new profile picture
+            </button>
           </div>
         </div>
 
-        {uploadNotice && (
-          <div className="p-2.5 bg-neutral-200 dark:bg-neutral-800 text-xs text-neutral-700 dark:text-neutral-300 rounded-lg">
-            {uploadNotice}
+        {photoNotice && (
+          <div className="p-2.5 bg-neutral-200 dark:bg-neutral-800 text-xs rounded-xl text-neutral-800 dark:text-neutral-200">
+            {photoNotice}
           </div>
         )}
 
-        {/* Bio */}
+        {nameNotice && (
+          <div className="p-2.5 bg-neutral-200 dark:bg-neutral-800 text-xs rounded-xl text-neutral-800 dark:text-neutral-200">
+            {nameNotice}
+          </div>
+        )}
+
+        {/* Bio / About */}
         <div className="pt-3 border-t border-neutral-200 dark:border-neutral-800">
-          <p className="text-[10px] font-bold uppercase text-neutral-400 mb-1">About Status</p>
+          <p className="text-[10px] font-bold uppercase text-neutral-400 mb-1">About Info</p>
           {isEditingBio ? (
             <div className="flex items-center space-x-2">
               <input
@@ -119,11 +272,11 @@ export const ProfileView: React.FC<ProfileViewProps> = ({ onOpenSecurityKeyModal
                 value={bioInput}
                 onChange={(e) => setBioInput(e.target.value)}
                 placeholder="About text..."
-                className="flex-1 px-3 py-1.5 bg-white dark:bg-[#18181b] border border-neutral-200 dark:border-neutral-700 rounded-lg text-xs focus:outline-none"
+                className="flex-1 px-3 py-1.5 bg-white dark:bg-[#18181b] border border-neutral-200 dark:border-neutral-700 rounded-xl text-xs focus:outline-none"
               />
               <button
                 onClick={handleSaveBio}
-                className="px-3 py-1.5 bg-neutral-900 dark:bg-white text-white dark:text-neutral-900 text-xs font-semibold rounded-lg"
+                className="px-3 py-1.5 bg-neutral-900 dark:bg-white text-white dark:text-neutral-900 text-xs font-semibold rounded-xl"
               >
                 Save
               </button>
@@ -132,8 +285,11 @@ export const ProfileView: React.FC<ProfileViewProps> = ({ onOpenSecurityKeyModal
             <div className="flex items-center justify-between text-xs text-neutral-600 dark:text-neutral-400">
               <p className="italic">{profile.bio || 'Available • End-to-end encrypted'}</p>
               <button
-                onClick={() => setIsEditingBio(true)}
-                className="p-1 text-neutral-500 hover:text-neutral-900 dark:hover:text-white"
+                onClick={() => {
+                  setBioInput(profile.bio || '');
+                  setIsEditingBio(true);
+                }}
+                className="p-1 text-neutral-400 hover:text-neutral-900 dark:hover:text-white"
               >
                 <Edit2 className="w-3.5 h-3.5" />
               </button>
@@ -142,121 +298,209 @@ export const ProfileView: React.FC<ProfileViewProps> = ({ onOpenSecurityKeyModal
         </div>
       </div>
 
-      {/* Security Key Card */}
-      <div className="p-6 bg-neutral-50 dark:bg-[#121215] rounded-2xl border border-neutral-200 dark:border-neutral-800 space-y-3">
-        <div className="flex items-center space-x-3">
-          <div className="w-10 h-10 rounded-full bg-neutral-200 dark:bg-neutral-800 text-neutral-800 dark:text-neutral-200 flex items-center justify-center">
-            <Key className="w-5 h-5" />
-          </div>
-          <div>
-            <h3 className="font-bold text-sm">Permanent Security Key</h3>
-            <p className="text-xs text-neutral-500">128-bit client-wrapped recovery entropy</p>
-          </div>
+      {/* Account Direct Chat Link (e.g. domain.com/akshatpopat) */}
+      <div className="p-6 bg-neutral-50 dark:bg-[#121215] rounded-3xl border border-neutral-200 dark:border-neutral-800 space-y-3">
+        <div className="flex items-center space-x-2.5">
+          <LinkIcon className="w-4 h-4 text-neutral-700 dark:text-neutral-300" />
+          <h3 className="font-bold text-sm">My Account Direct Link</h3>
         </div>
+        <p className="text-xs text-neutral-500 dark:text-neutral-400">
+          Share this URL with anyone so they can directly open an encrypted chat with you on Aegis:
+        </p>
 
-        <div className="p-3.5 bg-white dark:bg-[#18181b] rounded-xl border border-neutral-200 dark:border-neutral-800 flex items-center justify-between">
-          <span className="font-mono text-sm font-bold text-neutral-400 tracking-widest">
-            ••••-••••-••••
+        <div className="p-3 bg-white dark:bg-[#18181b] rounded-2xl border border-neutral-200 dark:border-neutral-800 flex items-center justify-between gap-2">
+          <span className="font-mono text-xs font-semibold truncate text-neutral-900 dark:text-white">
+            {accountLink}
           </span>
           <button
-            onClick={onOpenSecurityKeyModal}
-            className="px-3.5 py-1.5 bg-neutral-900 dark:bg-white text-white dark:text-neutral-900 text-xs font-semibold rounded-lg shadow-sm flex items-center space-x-1.5 transition-all"
+            onClick={handleCopyLink}
+            className="px-3 py-1.5 bg-neutral-900 hover:bg-neutral-800 dark:bg-white dark:hover:bg-neutral-200 text-white dark:text-neutral-900 text-xs font-bold rounded-xl flex items-center space-x-1.5 transition-colors shrink-0"
           >
-            <Eye className="w-3.5 h-3.5" />
-            <span>Unmask</span>
+            {copiedLink ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+            <span>{copiedLink ? 'Copied' : 'Copy Link'}</span>
           </button>
         </div>
-        <p className="text-[10px] text-neutral-400">
-          Password re-authentication is required before unmasking.
-        </p>
       </div>
 
-      {/* Privacy Preferences */}
-      <div className="p-6 bg-neutral-50 dark:bg-[#121215] rounded-2xl border border-neutral-200 dark:border-neutral-800 space-y-4">
-        <h3 className="font-bold text-sm flex items-center space-x-2">
-          <ShieldCheck className="w-4 h-4 text-neutral-700 dark:text-neutral-300" />
-          <span>Privacy & Security</span>
-        </h3>
+      {/* Change Password Form (with Security Key / Current Password verification) */}
+      <div className="p-6 bg-neutral-50 dark:bg-[#121215] rounded-3xl border border-neutral-200 dark:border-neutral-800 space-y-4">
+        <div className="flex items-center space-x-2.5">
+          <Lock className="w-4 h-4 text-neutral-700 dark:text-neutral-300" />
+          <h3 className="font-bold text-sm">Change Password</h3>
+        </div>
+        <p className="text-xs text-neutral-500 dark:text-neutral-400">
+          Enter your current password or 12-character Security Key, then enter and confirm your new password.
+        </p>
 
-        <div className="space-y-3 text-xs">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="font-semibold text-neutral-800 dark:text-neutral-200">Read Receipts</p>
-              <p className="text-[10px] text-neutral-400">Send checkmarks when messages are viewed</p>
-            </div>
+        {passwordNotice && (
+          <div className="p-3 bg-neutral-200 dark:bg-neutral-800 text-neutral-900 dark:text-white rounded-xl text-xs font-medium">
+            {passwordNotice}
+          </div>
+        )}
+
+        {passwordError && (
+          <div className="p-3 bg-neutral-100 dark:bg-[#18181b] border border-neutral-300 dark:border-neutral-700 rounded-xl text-xs flex items-center space-x-2">
+            <AlertCircle className="w-4 h-4 text-neutral-500 shrink-0" />
+            <span>{passwordError}</span>
+          </div>
+        )}
+
+        <form onSubmit={handlePasswordSubmit} className="space-y-3">
+          <div className="space-y-1">
+            <label className="text-xs font-semibold text-neutral-700 dark:text-neutral-300">
+              Current Password or Security Key
+            </label>
             <input
-              type="checkbox"
-              checked={readReceipts}
-              onChange={(e) => setReadReceipts(e.target.checked)}
-              className="w-4 h-4 accent-neutral-900 dark:accent-neutral-100 rounded cursor-pointer"
+              type="password"
+              required
+              value={currentPassOrSecKey}
+              onChange={(e) => setCurrentPassOrSecKey(e.target.value)}
+              placeholder="Current password or ABCD-EFGH-IJKL"
+              className="w-full px-3.5 py-2.5 bg-white dark:bg-[#18181b] rounded-xl text-xs border border-neutral-300 dark:border-neutral-700 focus:outline-none"
             />
           </div>
 
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="font-semibold text-neutral-800 dark:text-neutral-200">Typing Indicators</p>
-              <p className="text-[10px] text-neutral-400">Broadcast typing status in active chat</p>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div className="space-y-1">
+              <label className="text-xs font-semibold text-neutral-700 dark:text-neutral-300">
+                New Password
+              </label>
+              <input
+                type="password"
+                required
+                value={newPassword}
+                onChange={(e) => setNewPassword(e.target.value)}
+                placeholder="New password (min 4 chars)"
+                className="w-full px-3.5 py-2.5 bg-white dark:bg-[#18181b] rounded-xl text-xs border border-neutral-300 dark:border-neutral-700 focus:outline-none"
+              />
             </div>
-            <input
-              type="checkbox"
-              checked={typingIndicators}
-              onChange={(e) => setTypingIndicators(e.target.checked)}
-              className="w-4 h-4 accent-neutral-900 dark:accent-neutral-100 rounded cursor-pointer"
-            />
+
+            <div className="space-y-1">
+              <label className="text-xs font-semibold text-neutral-700 dark:text-neutral-300">
+                Confirm New Password
+              </label>
+              <input
+                type="password"
+                required
+                value={confirmNewPassword}
+                onChange={(e) => setConfirmNewPassword(e.target.value)}
+                placeholder="Re-enter new password"
+                className="w-full px-3.5 py-2.5 bg-white dark:bg-[#18181b] rounded-xl text-xs border border-neutral-300 dark:border-neutral-700 focus:outline-none"
+              />
+            </div>
           </div>
 
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="font-semibold text-neutral-800 dark:text-neutral-200">Online Status</p>
-              <p className="text-[10px] text-neutral-400">Show online presence to contacts</p>
-            </div>
-            <input
-              type="checkbox"
-              checked={onlineStatus}
-              onChange={(e) => setOnlineStatus(e.target.checked)}
-              className="w-4 h-4 accent-neutral-900 dark:accent-neutral-100 rounded cursor-pointer"
-            />
-          </div>
+          <button
+            type="submit"
+            disabled={passwordChangeLoading}
+            className="w-full py-2.5 bg-neutral-900 hover:bg-neutral-800 dark:bg-white dark:hover:bg-neutral-200 text-white dark:text-neutral-900 font-bold text-xs rounded-xl shadow-xs transition-colors disabled:opacity-50"
+          >
+            {passwordChangeLoading ? 'Verifying & Updating...' : 'Update Password'}
+          </button>
+        </form>
+      </div>
 
-          <div className="flex items-center justify-between pt-2 border-t border-neutral-200 dark:border-neutral-800">
-            <div>
-              <p className="font-semibold text-neutral-800 dark:text-neutral-200">Default Ephemeral Timer</p>
-              <p className="text-[10px] text-neutral-400">Disappearing timer for new conversations</p>
-            </div>
-            <select
-              value={defaultEphemeral}
-              onChange={(e) => setDefaultEphemeral(e.target.value as EphemeralSetting)}
-              className="px-2 py-1 bg-white dark:bg-[#18181b] border border-neutral-200 dark:border-neutral-700 rounded-lg text-xs"
+      {/* Permanent Security Key Card */}
+      <div className="p-6 bg-neutral-50 dark:bg-[#121215] rounded-3xl border border-neutral-200 dark:border-neutral-800 space-y-3">
+        <div className="flex items-center space-x-2.5">
+          <Key className="w-4 h-4 text-neutral-700 dark:text-neutral-300" />
+          <h3 className="font-bold text-sm">Permanent Security Key</h3>
+        </div>
+        <p className="text-xs text-neutral-500 dark:text-neutral-400">
+          Your 128-bit cryptographic client recovery key formatted as ABCD-EFGH-IJKL.
+        </p>
+
+        <div className="p-3.5 bg-white dark:bg-[#18181b] rounded-2xl border border-neutral-200 dark:border-neutral-800 flex items-center justify-between">
+          <span className="font-mono text-xs font-bold tracking-widest text-neutral-900 dark:text-white select-all">
+            {unmaskedSecurityKey ? unmaskedSecurityKey : '••••-••••-••••'}
+          </span>
+
+          {unmaskedSecurityKey ? (
+            <button
+              onClick={handleCopySecurityKey}
+              className="px-3 py-1.5 bg-neutral-100 dark:bg-neutral-800 text-neutral-900 dark:text-white text-xs font-bold rounded-xl flex items-center space-x-1.5"
             >
-              <option value="off">Off</option>
-              <option value="1h">1 hour</option>
-              <option value="24h">24 hours</option>
-              <option value="7d">7 days</option>
-            </select>
-          </div>
+              {copiedSecKey ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+              <span>{copiedSecKey ? 'Copied' : 'Copy'}</span>
+            </button>
+          ) : (
+            <button
+              onClick={() => setShowSecKeyAuthModal(true)}
+              className="px-3 py-1.5 bg-neutral-900 dark:bg-white text-white dark:text-neutral-900 text-xs font-bold rounded-xl flex items-center space-x-1.5"
+            >
+              <Eye className="w-3.5 h-3.5" />
+              <span>Reveal Key</span>
+            </button>
+          )}
         </div>
       </div>
 
       {/* Session Details & Logout */}
-      <div className="p-6 bg-neutral-50 dark:bg-[#121215] rounded-2xl border border-neutral-200 dark:border-neutral-800 space-y-3">
+      <div className="p-6 bg-neutral-50 dark:bg-[#121215] rounded-3xl border border-neutral-200 dark:border-neutral-800 space-y-3">
         <div className="flex items-center justify-between text-xs">
           <div className="flex items-center space-x-2">
-            <Smartphone className="w-4 h-4 text-neutral-600 dark:text-neutral-400" />
-            <span className="font-semibold text-neutral-800 dark:text-neutral-200">Current Web Session</span>
+            <Smartphone className="w-4 h-4 text-neutral-500" />
+            <span className="font-semibold">Web Client Session</span>
           </div>
-          <span className="text-[10px] text-neutral-600 dark:text-neutral-400 font-bold bg-neutral-200 dark:bg-neutral-800 px-2 py-0.5 rounded">
+          <span className="text-[10px] font-bold bg-neutral-200 dark:bg-neutral-800 px-2.5 py-0.5 rounded-full">
             Active
           </span>
         </div>
 
         <button
           onClick={logout}
-          className="w-full py-2.5 bg-neutral-200 dark:bg-neutral-800 hover:bg-neutral-300 dark:hover:bg-neutral-700 text-neutral-900 dark:text-white font-bold text-xs rounded-xl flex items-center justify-center space-x-2 transition-colors"
+          className="w-full py-2.5 bg-neutral-200 hover:bg-neutral-300 dark:bg-neutral-800 dark:hover:bg-neutral-700 text-neutral-900 dark:text-white font-bold text-xs rounded-xl flex items-center justify-center space-x-2 transition-colors"
         >
           <LogOut className="w-4 h-4" />
           <span>Sign Out Session</span>
         </button>
       </div>
+
+      {/* Modal: Re-authenticate to Reveal Security Key */}
+      {showSecKeyAuthModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
+          <div className="relative w-full max-w-sm bg-white dark:bg-[#121215] rounded-3xl shadow-2xl border border-neutral-200 dark:border-neutral-800 p-6 space-y-4">
+            <h3 className="font-bold text-sm">Enter Password to Reveal Key</h3>
+            <p className="text-xs text-neutral-500">
+              To verify identity, enter your account password.
+            </p>
+
+            {secKeyError && (
+              <div className="p-2.5 bg-neutral-100 dark:bg-neutral-800 rounded-xl text-xs text-neutral-900 dark:text-white">
+                {secKeyError}
+              </div>
+            )}
+
+            <form onSubmit={handleRevealSecurityKey} className="space-y-3">
+              <input
+                type="password"
+                required
+                autoFocus
+                value={secKeyAuthInput}
+                onChange={(e) => setSecKeyAuthInput(e.target.value)}
+                placeholder="Password"
+                className="w-full px-3.5 py-2.5 bg-neutral-100 dark:bg-[#18181b] rounded-xl text-xs border border-neutral-300 dark:border-neutral-700 focus:outline-none"
+              />
+
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => setShowSecKeyAuthModal(false)}
+                  className="flex-1 py-2 bg-neutral-200 dark:bg-neutral-800 text-neutral-800 dark:text-neutral-200 rounded-xl text-xs font-semibold"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="flex-1 py-2 bg-neutral-900 dark:bg-white text-white dark:text-neutral-900 rounded-xl text-xs font-bold"
+                >
+                  Reveal
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

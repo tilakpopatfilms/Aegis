@@ -3,22 +3,26 @@ import { MessageSquare, Search, User } from 'lucide-react';
 import { useChat } from '../context/ChatContext';
 
 interface NavigationProps {
-  activeTab: 'CHATS' | 'SEARCH' | 'PROFILE';
-  setActiveTab: (tab: 'CHATS' | 'SEARCH' | 'PROFILE') => void;
+  currentPath: string;
+  onNavigate: (route: string) => void;
 }
 
-export const Navigation: React.FC<NavigationProps> = ({ activeTab, setActiveTab }) => {
+export const Navigation: React.FC<NavigationProps> = ({ currentPath, onNavigate }) => {
   const { conversations } = useChat();
 
   const totalUnread = conversations.reduce((acc, c) => acc + (c.unreadCount || 0), 0);
+
+  const isChatActive = currentPath === '/' || currentPath === '/chat';
+  const isSearchActive = currentPath === '/search';
+  const isProfileActive = currentPath === '/profile';
 
   return (
     <nav className="sm:hidden fixed bottom-0 left-0 right-0 z-40 bg-white dark:bg-[#0c0c0e] border-t border-neutral-200 dark:border-neutral-800 py-1.5 px-4 shadow-md">
       <div className="flex items-center justify-around max-w-sm mx-auto">
         <button
-          onClick={() => setActiveTab('CHATS')}
+          onClick={() => onNavigate('/chat')}
           className={`flex flex-col items-center py-1 px-4 rounded-xl transition-colors ${
-            activeTab === 'CHATS'
+            isChatActive
               ? 'text-neutral-900 dark:text-white font-bold'
               : 'text-neutral-400 hover:text-neutral-700 dark:hover:text-neutral-200'
           }`}
@@ -35,9 +39,9 @@ export const Navigation: React.FC<NavigationProps> = ({ activeTab, setActiveTab 
         </button>
 
         <button
-          onClick={() => setActiveTab('SEARCH')}
+          onClick={() => onNavigate('/search')}
           className={`flex flex-col items-center py-1 px-4 rounded-xl transition-colors ${
-            activeTab === 'SEARCH'
+            isSearchActive
               ? 'text-neutral-900 dark:text-white font-bold'
               : 'text-neutral-400 hover:text-neutral-700 dark:hover:text-neutral-200'
           }`}
@@ -47,9 +51,9 @@ export const Navigation: React.FC<NavigationProps> = ({ activeTab, setActiveTab 
         </button>
 
         <button
-          onClick={() => setActiveTab('PROFILE')}
+          onClick={() => onNavigate('/profile')}
           className={`flex flex-col items-center py-1 px-4 rounded-xl transition-colors ${
-            activeTab === 'PROFILE'
+            isProfileActive
               ? 'text-neutral-900 dark:text-white font-bold'
               : 'text-neutral-400 hover:text-neutral-700 dark:hover:text-neutral-200'
           }`}

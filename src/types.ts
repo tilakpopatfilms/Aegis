@@ -8,8 +8,20 @@ export interface UserProfile {
   fullName: string;
   photoURL?: string;
   accountType: AccountType;
-  publicKey: string; // Base64 Ed25519/Curve25519 identity public key
+  publicKey: string; // Base64 Curve25519 identity public key
   bio?: string;
+  createdAt: string;
+}
+
+export interface UserCredentials {
+  username: string;
+  uid: string;
+  passwordHash: string;
+  salt: string;
+  encryptedPrivateKeyWithPassword?: { ciphertext: string; iv: string };
+  securityKeyHash?: string;
+  securityKeySalt?: string;
+  encryptedPrivateKeyWithSecKey?: { ciphertext: string; iv: string };
   createdAt: string;
 }
 
@@ -22,7 +34,7 @@ export interface UserPrekeys {
 
 export interface LocalKeyPair {
   publicKey: string;
-  privateKeyEncrypted: string; // Encrypted with password derived key
+  privateKeyEncrypted: string;
   salt: string;
 }
 
@@ -83,7 +95,7 @@ export interface DecryptedMessage {
 
 export interface SafetyNumberInfo {
   contactUid: string;
-  fingerprint: string; // Printable safety number string (e.g., 5-digit blocks)
+  fingerprint: string; // Printable safety number string
   verified: boolean;
   verifiedAt?: string;
 }

@@ -4,18 +4,11 @@ import { useAuth } from '../context/AuthContext';
 import { ThemeToggle } from './common/ThemeToggle';
 
 interface HeaderProps {
-  activeTab: 'CHATS' | 'SEARCH' | 'PROFILE';
-  setActiveTab: (tab: 'CHATS' | 'SEARCH' | 'PROFILE') => void;
-  onOpenRegister: () => void;
-  onOpenLogin: () => void;
+  currentPath: string;
+  onNavigate: (route: string) => void;
 }
 
-export const Header: React.FC<HeaderProps> = ({
-  activeTab,
-  setActiveTab,
-  onOpenRegister,
-  onOpenLogin,
-}) => {
+export const Header: React.FC<HeaderProps> = ({ currentPath, onNavigate }) => {
   const { user, profile, logout } = useAuth();
 
   const initials = profile?.fullName
@@ -27,13 +20,17 @@ export const Header: React.FC<HeaderProps> = ({
         .slice(0, 2)
     : 'A';
 
+  const isChatActive = currentPath === '/' || currentPath === '/chat';
+  const isSearchActive = currentPath === '/search';
+  const isProfileActive = currentPath === '/profile';
+
   return (
-    <header className="sticky top-0 z-40 bg-white dark:bg-[#0c0c0e] text-neutral-900 dark:text-neutral-100 border-b border-neutral-200 dark:border-neutral-800 px-4 py-2.5 transition-colors">
+    <header className="sticky top-0 z-40 bg-white dark:bg-[#0c0c0e] text-neutral-900 dark:text-neutral-100 border-b border-neutral-200 dark:border-neutral-800 px-4 py-2.5 transition-colors shrink-0">
       <div className="max-w-6xl mx-auto flex items-center justify-between">
         {/* Brand identity */}
         <div
           className="flex items-center space-x-3 cursor-pointer select-none"
-          onClick={() => setActiveTab('CHATS')}
+          onClick={() => onNavigate('/chat')}
         >
           <div className="w-8 h-8 rounded-full bg-neutral-900 dark:bg-white text-white dark:text-neutral-900 flex items-center justify-center font-bold">
             <Shield className="w-4 h-4" />
@@ -54,9 +51,9 @@ export const Header: React.FC<HeaderProps> = ({
         {user && (
           <div className="hidden sm:flex items-center space-x-1 bg-neutral-100 dark:bg-[#18181b] p-1 rounded-xl border border-neutral-200 dark:border-neutral-800">
             <button
-              onClick={() => setActiveTab('CHATS')}
+              onClick={() => onNavigate('/chat')}
               className={`flex items-center space-x-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
-                activeTab === 'CHATS'
+                isChatActive
                   ? 'bg-white dark:bg-neutral-900 text-neutral-900 dark:text-white shadow-xs'
                   : 'text-neutral-500 hover:text-neutral-900 dark:hover:text-white'
               }`}
@@ -66,9 +63,9 @@ export const Header: React.FC<HeaderProps> = ({
             </button>
 
             <button
-              onClick={() => setActiveTab('SEARCH')}
+              onClick={() => onNavigate('/search')}
               className={`flex items-center space-x-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
-                activeTab === 'SEARCH'
+                isSearchActive
                   ? 'bg-white dark:bg-neutral-900 text-neutral-900 dark:text-white shadow-xs'
                   : 'text-neutral-500 hover:text-neutral-900 dark:hover:text-white'
               }`}
@@ -78,9 +75,9 @@ export const Header: React.FC<HeaderProps> = ({
             </button>
 
             <button
-              onClick={() => setActiveTab('PROFILE')}
+              onClick={() => onNavigate('/profile')}
               className={`flex items-center space-x-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
-                activeTab === 'PROFILE'
+                isProfileActive
                   ? 'bg-white dark:bg-neutral-900 text-neutral-900 dark:text-white shadow-xs'
                   : 'text-neutral-500 hover:text-neutral-900 dark:hover:text-white'
               }`}
@@ -98,7 +95,7 @@ export const Header: React.FC<HeaderProps> = ({
           {user && profile ? (
             <div className="flex items-center space-x-2 pl-2 border-l border-neutral-200 dark:border-neutral-800">
               <button
-                onClick={() => setActiveTab('PROFILE')}
+                onClick={() => onNavigate('/profile')}
                 className="flex items-center space-x-2 p-1 rounded-full hover:bg-neutral-100 dark:hover:bg-neutral-800 transition-colors"
                 title="Profile"
               >
@@ -129,13 +126,13 @@ export const Header: React.FC<HeaderProps> = ({
           ) : (
             <div className="flex items-center space-x-2">
               <button
-                onClick={onOpenLogin}
+                onClick={() => onNavigate('/login')}
                 className="px-3 py-1.5 text-xs font-semibold text-neutral-700 dark:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-800 rounded-lg transition-colors"
               >
                 Sign In
               </button>
               <button
-                onClick={onOpenRegister}
+                onClick={() => onNavigate('/register')}
                 className="px-3 py-1.5 text-xs font-semibold bg-neutral-900 dark:bg-white text-white dark:text-neutral-900 hover:bg-neutral-800 dark:hover:bg-neutral-100 rounded-lg shadow-sm transition-all"
               >
                 Create Account

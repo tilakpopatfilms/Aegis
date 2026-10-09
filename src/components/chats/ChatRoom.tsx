@@ -1,7 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import {
   Shield,
-  Lock,
   Clock,
   Send,
   Paperclip,
@@ -13,9 +12,9 @@ import {
   MoreVertical,
   Star,
   Copy,
-  Image as ImageIcon,
   ArrowLeft,
   ShieldCheck,
+  Link as LinkIcon,
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { useChat } from '../../context/ChatContext';
@@ -51,10 +50,13 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({ onBack }) => {
   const [showTimerMenu, setShowTimerMenu] = useState(false);
   const [selectedImageFull, setSelectedImageFull] = useState<string | null>(null);
   const [starredMsgIds, setStarredMsgIds] = useState<Set<string>>(new Set());
+  const [copiedLinkNotice, setCopiedLinkNotice] = useState(false);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
 
+  // Auto-scroll to latest message on change
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
@@ -64,10 +66,8 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({ onBack }) => {
     if (!profile || !selectedConversation?.otherUser) return;
 
     const loadSafety = async () => {
-      const fingerprint = await generateSafetyNumber(
-        profile.publicKey,
-        selectedConversation.otherUser!.publicKey
-      );
+      const otherPubKey = selectedConversation.otherUser!.publicKey || profile.publicKey;
+      const fingerprint = await generateSafetyNumber(profile.publicKey, otherPubKey);
       setSafetyFingerprint(fingerprint);
 
       const stored = await getSafetyNumber(selectedConversation.otherUser!.uid);
@@ -81,13 +81,13 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({ onBack }) => {
 
   if (!selectedConversation || !selectedConversation.otherUser) {
     return (
-      <div className="flex-1 flex flex-col items-center justify-center p-8 text-center bg-white dark:bg-[#0c0c0e] text-neutral-800 dark:text-neutral-200">
-        <div className="w-12 h-12 rounded-full bg-neutral-100 dark:bg-[#18181b] text-neutral-900 dark:text-white flex items-center justify-center mb-3 border border-neutral-200 dark:border-neutral-800">
-          <Shield className="w-6 h-6" />
+      <div className="flex-1 h-full flex flex-col items-center justify-center p-8 text-center bg-white dark:bg-[#0c0c0e] text-neutral-800 dark:text-neutral-200">
+        <div className="w-14 h-14 rounded-full bg-neutral-100 dark:bg-[#18181b] text-neutral-900 dark:text-white flex items-center justify-center mb-3 border border-neutral-200 dark:border-neutral-800">
+          <Shield className="w-7 h-7" />
         </div>
-        <h3 className="text-base font-bold mb-1">Aegis End-to-End Encryption</h3>
+        <h3 className="text-base font-bold mb-1">Aegis Encrypted Messaging</h3>
         <p className="text-xs text-neutral-500 max-w-sm">
-          Select a conversation from the sidebar or find a contact by username to start an encrypted session.
+          Select a chat from the sidebar or find contacts in the search directory to begin an end-to-end encrypted session.
         </p>
       </div>
     );
@@ -95,16 +95,17 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({ onBack }) => {
 
   const otherUser = selectedConversation.otherUser;
 
-  const handleSendText = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const handleSendText = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
     if (!textInput.trim()) return;
 
-    const textToSend = textInput;
+    const textToSend = textInput.trim();
     setTextInput('');
     const replyId = replyingTo?.id;
     setReplyingTo(null);
 
     await sendTextMessage(textToSend, replyId);
+    inputRef.current?.focus();
   };
 
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -127,6 +128,13 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({ onBack }) => {
     if (text) {
       navigator.clipboard.writeText(text);
     }
+  };
+
+  const handleCopyContactLink = () => {
+    navigator.clipboard.writeText(`${window.location.origin}/${otherUser.username}`);
+    setCopiedLinkNotice(true);
+    setTimeout(() => setCopiedLinkNotice(false), 2500);
+    setShowOptionsMenu(false);
   };
 
   const toggleSafetyVerification = async () => {
@@ -152,59 +160,74 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({ onBack }) => {
 
   const hasOtherPhoto = otherUser.photoURL && !otherUser.photoURL.startsWith('data:image/svg+xml;utf8');
 
+  const formatMsgTime = (iso?: string) => {
+    if (!iso) return '';
+    try {
+      const date = new Date(iso);
+      return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    } catch {
+      return '';
+    }
+  };
+
   return (
-    <div className="flex-1 flex flex-col h-full bg-[#fbfbfb] dark:bg-[#0c0c0e] relative overflow-hidden">
+    <div className="flex-1 flex flex-col h-full bg-[#fbfbfb] dark:bg-[#0c0c0e] relative overflow-hidden select-none">
       {/* Top Header */}
-      <div className="px-3.5 py-2.5 bg-white dark:bg-[#121215] border-b border-neutral-200 dark:border-neutral-800 flex items-center justify-between z-20">
-        <div className="flex items-center space-x-3">
+      <div className="px-4 py-2.5 bg-white dark:bg-[#121215] border-b border-neutral-200 dark:border-neutral-800 flex items-center justify-between shrink-0 z-20">
+        <div className="flex items-center space-x-3 min-w-0">
           {onBack && (
             <button
               onClick={onBack}
-              className="p-1.5 text-neutral-600 dark:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-800 rounded-lg md:hidden"
+              className="p-1.5 text-neutral-600 dark:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-800 rounded-lg md:hidden shrink-0"
+              title="Back"
             >
               <ArrowLeft className="w-4 h-4" />
             </button>
           )}
 
           <div
-            className="flex items-center space-x-3 cursor-pointer"
+            className="flex items-center space-x-3 cursor-pointer min-w-0"
             onClick={() => setShowSafetyModal(true)}
           >
             {hasOtherPhoto ? (
               <img
                 src={otherUser.photoURL}
                 alt={otherUser.fullName}
-                className="w-9 h-9 rounded-full object-cover border border-neutral-300 dark:border-neutral-700"
+                className="w-10 h-10 rounded-full object-cover border border-neutral-300 dark:border-neutral-700 shrink-0"
               />
             ) : (
-              <div className="w-9 h-9 rounded-full bg-neutral-900 dark:bg-white text-white dark:text-neutral-900 flex items-center justify-center font-bold text-xs select-none">
+              <div className="w-10 h-10 rounded-full bg-neutral-900 dark:bg-white text-white dark:text-neutral-900 flex items-center justify-center font-bold text-xs select-none shrink-0">
                 {otherInitials}
               </div>
             )}
 
-            <div>
+            <div className="min-w-0">
               <div className="flex items-center space-x-1.5">
-                <h3 className="font-semibold text-xs text-neutral-900 dark:text-neutral-100">
+                <h3 className="font-semibold text-xs text-neutral-900 dark:text-neutral-100 truncate">
                   {otherUser.fullName}
                 </h3>
                 {isVerified && (
                   <span title="Safety Number Verified">
-                    <ShieldCheck className="w-3.5 h-3.5 text-neutral-900 dark:text-white" />
+                    <ShieldCheck className="w-3.5 h-3.5 text-neutral-900 dark:text-white shrink-0" />
                   </span>
                 )}
               </div>
-              <p className="text-[10px] text-neutral-400">
-                online • end-to-end encrypted
+              <p className="text-[10px] text-neutral-400 font-mono truncate">
+                @{otherUser.username} • end-to-end encrypted
               </p>
             </div>
           </div>
         </div>
 
         {/* Action icons on top right */}
-        <div className="flex items-center space-x-1 text-neutral-600 dark:text-neutral-400">
+        <div className="flex items-center space-x-1 text-neutral-600 dark:text-neutral-400 shrink-0">
           <button
             onClick={() => setShowTimerMenu(!showTimerMenu)}
-            className="p-1.5 hover:bg-neutral-100 dark:hover:bg-neutral-800 rounded-lg transition-colors relative"
+            className={`p-2 hover:bg-neutral-100 dark:hover:bg-neutral-800 rounded-lg transition-colors relative ${
+              selectedConversation.ephemeralSetting !== 'off'
+                ? 'text-neutral-900 dark:text-white font-bold'
+                : ''
+            }`}
             title={`Disappearing Timer: ${selectedConversation.ephemeralSetting}`}
           >
             <Clock className="w-4 h-4" />
@@ -212,7 +235,7 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({ onBack }) => {
 
           <button
             onClick={() => setShowOptionsMenu(!showOptionsMenu)}
-            className="p-1.5 hover:bg-neutral-100 dark:hover:bg-neutral-800 rounded-lg transition-colors"
+            className="p-2 hover:bg-neutral-100 dark:hover:bg-neutral-800 rounded-lg transition-colors"
             title="Options"
           >
             <MoreVertical className="w-4 h-4" />
@@ -222,8 +245,10 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({ onBack }) => {
 
       {/* Disappearing Timer Menu Dropdown */}
       {showTimerMenu && (
-        <div className="absolute top-12 right-10 z-30 bg-white dark:bg-[#18181b] rounded-xl shadow-xl border border-neutral-200 dark:border-neutral-800 p-1.5 text-xs w-44 text-neutral-800 dark:text-neutral-200">
-          <p className="px-2 py-1 font-bold text-[10px] uppercase text-neutral-400">Disappearing Messages</p>
+        <div className="absolute top-14 right-10 z-30 bg-white dark:bg-[#18181b] rounded-2xl shadow-xl border border-neutral-200 dark:border-neutral-800 p-1.5 text-xs w-48 text-neutral-800 dark:text-neutral-200">
+          <p className="px-2.5 py-1 font-bold text-[10px] uppercase text-neutral-400">
+            Disappearing Messages
+          </p>
           {(['off', 'viewed', '1h', '24h', '7d'] as EphemeralSetting[]).map((timer) => (
             <button
               key={timer}
@@ -231,7 +256,7 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({ onBack }) => {
                 updateEphemeralSetting(timer);
                 setShowTimerMenu(false);
               }}
-              className={`w-full text-left px-2.5 py-1.5 rounded-lg flex items-center justify-between transition-colors ${
+              className={`w-full text-left px-3 py-1.5 rounded-lg flex items-center justify-between transition-colors ${
                 selectedConversation.ephemeralSetting === timer
                   ? 'bg-neutral-900 dark:bg-white text-white dark:text-neutral-900 font-semibold'
                   : 'hover:bg-neutral-100 dark:hover:bg-[#202024]'
@@ -246,7 +271,7 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({ onBack }) => {
 
       {/* Options Dropdown */}
       {showOptionsMenu && (
-        <div className="absolute top-12 right-2 z-30 bg-white dark:bg-[#18181b] rounded-xl shadow-xl border border-neutral-200 dark:border-neutral-800 p-1.5 text-xs w-48 text-neutral-800 dark:text-neutral-200">
+        <div className="absolute top-14 right-3 z-30 bg-white dark:bg-[#18181b] rounded-2xl shadow-xl border border-neutral-200 dark:border-neutral-800 p-1.5 text-xs w-52 text-neutral-800 dark:text-neutral-200">
           <button
             onClick={() => {
               setShowOptionsMenu(false);
@@ -258,6 +283,13 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({ onBack }) => {
             <span>Verify Safety Number</span>
           </button>
           <button
+            onClick={handleCopyContactLink}
+            className="w-full text-left px-3 py-2 rounded-lg hover:bg-neutral-100 dark:hover:bg-[#202024] flex items-center space-x-2"
+          >
+            <LinkIcon className="w-3.5 h-3.5" />
+            <span>Copy Contact Account Link</span>
+          </button>
+          <button
             onClick={() => {
               setShowOptionsMenu(false);
               setShowTimerMenu(true);
@@ -267,6 +299,7 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({ onBack }) => {
             <Clock className="w-3.5 h-3.5" />
             <span>Disappearing messages</span>
           </button>
+          <div className="border-t border-neutral-100 dark:border-neutral-800 my-1" />
           <button
             onClick={() => {
               setShowOptionsMenu(false);
@@ -275,157 +308,173 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({ onBack }) => {
             className="w-full text-left px-3 py-2 rounded-lg hover:bg-neutral-100 dark:hover:bg-[#202024] text-rose-600 flex items-center space-x-2"
           >
             <Trash2 className="w-3.5 h-3.5" />
-            <span>Delete Conversation</span>
+            <span>Delete conversation</span>
           </button>
         </div>
       )}
 
-      {/* Messages Scroll Area */}
-      <div className="flex-1 overflow-y-auto px-4 py-3 space-y-2">
-        {/* End-to-End Encryption Notice Banner */}
-        <div className="text-center my-3 max-w-sm mx-auto">
-          <div className="inline-flex items-center space-x-1.5 px-3 py-1.5 rounded-lg bg-neutral-100 dark:bg-[#18181b] border border-neutral-200 dark:border-neutral-800 text-[11px] text-neutral-500 dark:text-neutral-400 shadow-2xs leading-relaxed">
-            <Lock className="w-3 h-3 text-neutral-700 dark:text-neutral-300 shrink-0" />
-            <span>Messages are end-to-end encrypted. No one outside this chat can read them.</span>
+      {copiedLinkNotice && (
+        <div className="absolute top-16 left-1/2 -translate-x-1/2 z-30 px-3.5 py-1.5 bg-neutral-900 text-white text-xs rounded-xl shadow-lg">
+          Contact direct link copied!
+        </div>
+      )}
+
+      {/* Main Messages Scroll Area */}
+      <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-3 min-h-0">
+        {/* Encryption Header Notice */}
+        <div className="text-center py-4">
+          <div className="inline-flex items-center space-x-1.5 px-3.5 py-1 bg-neutral-100 dark:bg-[#18181b] border border-neutral-200 dark:border-neutral-800 rounded-full text-[11px] text-neutral-500">
+            <Shield className="w-3 h-3 text-neutral-700 dark:text-neutral-300" />
+            <span>Messages are end-to-end encrypted. No third party can read them.</span>
           </div>
         </div>
 
+        {/* Message Thread */}
         {messages.map((m) => {
-          const isMe = m.senderUid === user?.uid;
+          const isSender = m.senderUid === user?.uid;
           const isStarred = starredMsgIds.has(m.id);
+          const replyParent = m.replyToId ? messages.find((p) => p.id === m.replyToId) : null;
 
           return (
             <div
               key={m.id}
-              className={`flex flex-col ${isMe ? 'items-end' : 'items-start'} group relative`}
+              className={`group flex flex-col ${isSender ? 'items-end' : 'items-start'} space-y-1`}
             >
-              {/* Message Bubble */}
+              {/* Message Bubble Container */}
               <div
-                className={`max-w-[85%] md:max-w-[65%] rounded-xl px-3.5 py-2 relative transition-all text-neutral-900 dark:text-neutral-100 ${
-                  isMe
-                    ? 'bg-neutral-900 dark:bg-[#27272a] text-white rounded-tr-none'
-                    : 'bg-white dark:bg-[#18181b] rounded-tl-none border border-neutral-200 dark:border-neutral-800'
+                className={`relative px-3.5 py-2.5 rounded-2xl text-xs shadow-2xs max-w-[85%] sm:max-w-md ${
+                  isSender
+                    ? 'bg-neutral-900 text-white dark:bg-white dark:text-neutral-900 rounded-br-xs'
+                    : 'bg-white dark:bg-[#18181b] text-neutral-900 dark:text-white rounded-bl-xs border border-neutral-200 dark:border-neutral-800'
                 }`}
               >
-                {/* Quoted reply banner */}
-                {m.content.replyToId && (
-                  <div className={`mb-1.5 p-1.5 rounded text-[11px] flex items-center space-x-1 border-l-2 ${
-                    isMe
-                      ? 'bg-white/10 border-white text-white/90'
-                      : 'bg-neutral-100 dark:bg-black/30 border-neutral-900 dark:border-white text-neutral-600 dark:text-neutral-300'
-                  }`}>
-                    <CornerDownRight className="w-3 h-3 shrink-0" />
-                    <span className="truncate">Replying to previous message</span>
+                {/* Reply Citation */}
+                {replyParent && (
+                  <div
+                    className={`mb-2 p-2 rounded-lg border-l-2 text-[11px] opacity-80 ${
+                      isSender
+                        ? 'bg-white/10 border-white text-white dark:bg-black/10 dark:border-black dark:text-black'
+                        : 'bg-neutral-100 dark:bg-neutral-800 border-neutral-400 text-neutral-600 dark:text-neutral-300'
+                    }`}
+                  >
+                    <p className="font-semibold text-[10px]">
+                      {replyParent.senderUid === user?.uid ? 'You' : otherUser.fullName}
+                    </p>
+                    <p className="truncate">
+                      {replyParent.content.text || (replyParent.content.imageBase64 ? 'Photo' : '')}
+                    </p>
                   </div>
                 )}
 
-                {/* Encrypted Image */}
+                {/* Attached Image */}
                 {m.content.imageBase64 && (
-                  <div
-                    className="mb-1.5 overflow-hidden rounded-lg cursor-pointer"
-                    onClick={() => setSelectedImageFull(m.content.imageBase64!)}
-                  >
+                  <div className="mb-2 rounded-xl overflow-hidden cursor-pointer">
                     <img
                       src={m.content.imageBase64}
-                      alt="Encrypted attachment"
-                      className="w-full max-h-72 object-cover rounded hover:opacity-95"
+                      alt={m.content.fileName || 'Attachment'}
+                      onClick={() => setSelectedImageFull(m.content.imageBase64!)}
+                      className="max-h-60 rounded-xl object-cover hover:opacity-95 transition-opacity"
                     />
                   </div>
                 )}
 
-                {/* Text Message */}
+                {/* Plaintext Content */}
                 {m.content.text && (
-                  <p className="text-[13px] leading-relaxed whitespace-pre-wrap font-normal break-words pr-10">
+                  <p className="whitespace-pre-wrap break-words leading-relaxed">
                     {m.content.text}
                   </p>
                 )}
 
-                {/* Bubble Footer (Time + Double Ticks) */}
+                {/* Footer: Timestamp, Ephemeral, Status */}
                 <div
-                  className={`flex items-center justify-end space-x-1 text-[10px] mt-0.5 select-none ${
-                    isMe ? 'text-white/60' : 'text-neutral-400'
+                  className={`flex items-center justify-end space-x-1 mt-1 text-[9px] select-none ${
+                    isSender
+                      ? 'text-neutral-300 dark:text-neutral-600'
+                      : 'text-neutral-400 dark:text-neutral-500'
                   }`}
                 >
-                  {isStarred && <Star className="w-2.5 h-2.5 fill-current mr-0.5" />}
-                  {m.ephemeralType !== 'off' && <Clock className="w-2.5 h-2.5 mr-0.5" />}
-                  <span>
-                    {new Date(m.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                  </span>
-                  {isMe && (
-                    <span className="ml-0.5">
-                      <CheckCheck className="w-3.5 h-3.5 inline" />
+                  {isStarred && <Star className="w-2.5 h-2.5 fill-current" />}
+                  {m.ephemeralType !== 'off' && <Clock className="w-2.5 h-2.5" />}
+                  <span>{formatMsgTime(m.timestamp)}</span>
+                  {isSender && (
+                    <span>
+                      {m.status === 'delivered' || m.status === 'read' ? (
+                        <CheckCheck className="w-3 h-3" />
+                      ) : (
+                        <Check className="w-3 h-3" />
+                      )}
                     </span>
                   )}
                 </div>
               </div>
 
-              {/* Action Buttons on Hover */}
+              {/* Message Hover Actions */}
               <div
-                className={`opacity-0 group-hover:opacity-100 flex items-center space-x-0.5 mt-0.5 transition-opacity ${
-                  isMe ? 'flex-row-reverse space-x-reverse' : ''
-                }`}
+                className={`opacity-0 group-hover:opacity-100 flex items-center space-x-1 px-1 transition-opacity text-neutral-400 text-[11px]`}
               >
                 <button
-                  type="button"
                   onClick={() => setReplyingTo(m)}
-                  className="p-1 text-neutral-400 hover:text-neutral-800 dark:hover:text-white rounded"
+                  className="p-1 hover:text-neutral-900 dark:hover:text-white"
                   title="Reply"
                 >
-                  <CornerDownRight className="w-3.5 h-3.5" />
+                  <CornerDownRight className="w-3 h-3" />
                 </button>
                 <button
-                  type="button"
-                  onClick={() => handleToggleStar(m.id)}
-                  className="p-1 text-neutral-400 hover:text-neutral-800 dark:hover:text-white rounded"
-                  title="Star message"
-                >
-                  <Star className={`w-3.5 h-3.5 ${isStarred ? 'fill-current' : ''}`} />
-                </button>
-                <button
-                  type="button"
                   onClick={() => handleCopyText(m.content.text)}
-                  className="p-1 text-neutral-400 hover:text-neutral-800 dark:hover:text-white rounded"
+                  className="p-1 hover:text-neutral-900 dark:hover:text-white"
                   title="Copy"
                 >
-                  <Copy className="w-3.5 h-3.5" />
+                  <Copy className="w-3 h-3" />
                 </button>
                 <button
-                  type="button"
-                  onClick={() => deleteMessageLocally(m.id)}
-                  className="p-1 text-neutral-400 hover:text-rose-600 rounded"
-                  title="Delete message"
+                  onClick={() => handleToggleStar(m.id)}
+                  className="p-1 hover:text-neutral-900 dark:hover:text-white"
+                  title="Star"
                 >
-                  <Trash2 className="w-3.5 h-3.5" />
+                  <Star className="w-3 h-3" />
+                </button>
+                <button
+                  onClick={() => deleteMessageLocally(m.id)}
+                  className="p-1 hover:text-rose-600"
+                  title="Delete locally"
+                >
+                  <Trash2 className="w-3 h-3" />
                 </button>
               </div>
             </div>
           );
         })}
+
         <div ref={messagesEndRef} />
       </div>
 
-      {/* Quoted Reply Preview Strip */}
+      {/* Reply Preview Bar */}
       {replyingTo && (
-        <div className="px-4 py-2 bg-neutral-100 dark:bg-[#18181b] border-t border-neutral-200 dark:border-neutral-800 flex items-center justify-between text-xs">
+        <div className="px-4 py-2 bg-neutral-100 dark:bg-[#18181b] border-t border-neutral-200 dark:border-neutral-800 flex items-center justify-between text-xs shrink-0">
           <div className="flex items-center space-x-2 truncate">
-            <CornerDownRight className="w-4 h-4 text-neutral-700 dark:text-neutral-300 shrink-0" />
-            <span className="text-neutral-600 dark:text-neutral-300 truncate">
-              Replying to: {replyingTo.content.text || 'Image Attachment'}
-            </span>
+            <CornerDownRight className="w-4 h-4 text-neutral-500 shrink-0" />
+            <div className="truncate">
+              <span className="font-semibold text-neutral-900 dark:text-white">
+                Replying to {replyingTo.senderUid === user?.uid ? 'yourself' : otherUser.fullName}:
+              </span>{' '}
+              <span className="text-neutral-500">
+                {replyingTo.content.text || (replyingTo.content.imageBase64 ? 'Photo' : '')}
+              </span>
+            </div>
           </div>
           <button
             onClick={() => setReplyingTo(null)}
-            className="p-1 text-neutral-400 hover:text-neutral-800 dark:hover:text-white"
+            className="p-1 text-neutral-400 hover:text-neutral-900 dark:hover:text-white"
           >
             <X className="w-4 h-4" />
           </button>
         </div>
       )}
 
-      {/* Bottom Composer */}
+      {/* Message Composer (Always pinned at bottom) */}
       <form
         onSubmit={handleSendText}
-        className="p-2.5 bg-white dark:bg-[#121215] border-t border-neutral-200 dark:border-neutral-800 flex items-center space-x-2"
+        className="p-3 sm:p-4 bg-white dark:bg-[#121215] border-t border-neutral-200 dark:border-neutral-800 flex items-center space-x-2 shrink-0 z-20"
       >
         <input
           type="file"
@@ -438,24 +487,25 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({ onBack }) => {
         <button
           type="button"
           onClick={() => fileInputRef.current?.click()}
-          className="p-2 text-neutral-500 hover:text-neutral-900 dark:hover:text-white rounded-lg transition-colors"
-          title="Attach Encrypted Image"
+          className="p-2 text-neutral-500 hover:text-neutral-900 dark:hover:text-white hover:bg-neutral-100 dark:hover:bg-neutral-800 rounded-xl transition-colors shrink-0"
+          title="Send Encrypted Image"
         >
           <Paperclip className="w-4 h-4" />
         </button>
 
         <input
+          ref={inputRef}
           type="text"
           value={textInput}
           onChange={(e) => setTextInput(e.target.value)}
           placeholder="Type an encrypted message..."
-          className="flex-1 px-3.5 py-2 bg-neutral-100 dark:bg-[#18181b] rounded-xl text-xs text-neutral-900 dark:text-neutral-100 placeholder-neutral-400 border border-neutral-200 dark:border-neutral-800 focus:outline-none"
+          className="flex-1 px-3.5 py-2.5 bg-neutral-100 dark:bg-[#18181b] rounded-xl text-xs text-neutral-900 dark:text-neutral-100 placeholder-neutral-400 border border-neutral-200 dark:border-neutral-800 focus:outline-none focus:border-neutral-900 dark:focus:border-white transition-colors"
         />
 
         <button
           type="submit"
           disabled={!textInput.trim()}
-          className="p-2 bg-neutral-900 hover:bg-neutral-800 dark:bg-white dark:hover:bg-neutral-200 text-white dark:text-neutral-900 rounded-xl transition-colors disabled:opacity-40"
+          className="p-2.5 bg-neutral-900 hover:bg-neutral-800 dark:bg-white dark:hover:bg-neutral-200 text-white dark:text-neutral-900 rounded-xl transition-colors disabled:opacity-40 shrink-0 shadow-xs"
           title="Send"
         >
           <Send className="w-4 h-4" />
@@ -465,10 +515,10 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({ onBack }) => {
       {/* Modal: Safety Number Verification */}
       {showSafetyModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
-          <div className="relative w-full max-w-md bg-white dark:bg-[#121215] rounded-2xl shadow-2xl border border-neutral-200 dark:border-neutral-800 p-6 text-center space-y-4 text-neutral-900 dark:text-neutral-100">
+          <div className="relative w-full max-w-md bg-white dark:bg-[#121215] rounded-3xl shadow-2xl border border-neutral-200 dark:border-neutral-800 p-6 sm:p-8 text-center space-y-4 text-neutral-900 dark:text-neutral-100">
             <button
               onClick={() => setShowSafetyModal(false)}
-              className="absolute top-4 right-4 p-2 text-neutral-400 hover:text-neutral-800 dark:hover:text-white rounded-full"
+              className="absolute top-4 right-4 p-2 text-neutral-400 hover:text-neutral-900 dark:hover:text-white rounded-full"
             >
               <X className="w-5 h-5" />
             </button>
@@ -482,7 +532,7 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({ onBack }) => {
               Compare this fingerprint with {otherUser.fullName} (@{otherUser.username}) to confirm end-to-end encryption.
             </p>
 
-            <div className="p-4 bg-neutral-100 dark:bg-[#18181b] rounded-xl border border-neutral-200 dark:border-neutral-800 font-mono text-sm tracking-wider text-neutral-900 dark:text-white whitespace-pre-line leading-relaxed">
+            <div className="p-4 bg-neutral-100 dark:bg-[#18181b] rounded-2xl border border-neutral-200 dark:border-neutral-800 font-mono text-xs sm:text-sm tracking-wider text-neutral-900 dark:text-white whitespace-pre-line leading-relaxed select-all">
               {safetyFingerprint}
             </div>
 
@@ -491,7 +541,7 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({ onBack }) => {
               className={`w-full py-2.5 font-bold rounded-xl transition-all text-xs ${
                 isVerified
                   ? 'bg-neutral-200 dark:bg-[#202024] text-neutral-800 dark:text-neutral-200'
-                  : 'bg-neutral-900 hover:bg-neutral-800 dark:bg-white dark:hover:bg-neutral-200 text-white dark:text-neutral-900 shadow-sm'
+                  : 'bg-neutral-900 hover:bg-neutral-800 dark:bg-white dark:hover:bg-neutral-200 text-white dark:text-neutral-900 shadow-xs'
               }`}
             >
               {isVerified ? 'Mark as Unverified' : 'Mark as Verified'}
@@ -515,7 +565,7 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({ onBack }) => {
           <img
             src={selectedImageFull}
             alt="Attachment"
-            className="max-w-full max-h-[85vh] rounded-xl shadow-2xl object-contain"
+            className="max-w-full max-h-[85vh] rounded-2xl shadow-2xl object-contain"
           />
         </div>
       )}

@@ -1,6 +1,6 @@
-import React, { useState } from 'react';
-import { Search, QrCode, Lock, UserPlus, Globe, Shield } from 'lucide-react';
-import { collection, query, where, getDocs, doc, getDoc } from 'firebase/firestore';
+import React, { useState, useEffect } from 'react';
+import { Search, QrCode, UserPlus, AlertCircle, MessageSquare } from 'lucide-react';
+import { collection, getDocs, query } from 'firebase/firestore';
 import { db } from '../../firebase';
 import { useAuth } from '../../context/AuthContext';
 import { useChat } from '../../context/ChatContext';
@@ -15,67 +15,71 @@ export const SearchView: React.FC<SearchViewProps> = ({ onSelectUser, onOpenQR }
   const { user } = useAuth();
   const { startOrGetConversation } = useChat();
 
-  const [activeTab, setActiveTab] = useState<'public' | 'exactPrivate'>('public');
   const [queryInput, setQueryInput] = useState('');
   const [results, setResults] = useState<UserProfile[]>([]);
   const [loading, setLoading] = useState(false);
-  const [searched, setSearched] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [hasSearched, setHasSearched] = useState(false);
 
-  const handleSearch = async (e: React.FormEvent) => {
-    e.preventDefault();
+  // Live real-time search with space insensitivity and 5-result limit
+  const performSearch = async (searchTerm: string) => {
     setError(null);
-    if (!queryInput.trim()) return;
+    const cleaned = searchTerm.trim().toLowerCase();
+    if (!cleaned) {
+      setResults([]);
+      setHasSearched(false);
+      return;
+    }
 
     setLoading(true);
-    setSearched(true);
-    setResults([]);
-
-    const cleanInput = queryInput.trim().toLowerCase().replace('@', '');
+    setHasSearched(true);
 
     try {
-      if (activeTab === 'public') {
-        const q = query(
-          collection(db, 'public_profiles'),
-          where('accountType', '==', 'public')
-        );
-        const snapshot = await getDocs(q);
-        const list: UserProfile[] = [];
+      // Space-insensitive sanitized query
+      const sanitized = cleaned.replace(/\s+/g, '').replace('@', '');
 
-        snapshot.forEach((docSnap) => {
-          const data = docSnap.data() as UserProfile;
-          if (
-            data.uid !== user?.uid &&
-            (data.username.includes(cleanInput) || data.fullName.toLowerCase().includes(cleanInput))
-          ) {
-            list.push(data);
-          }
-        });
+      // Fetch public profiles from Firestore
+      const snap = await getDocs(collection(db, 'public_profiles'));
+      const matches: UserProfile[] = [];
 
-        setResults(list);
-      } else {
-        const usernameSnap = await getDoc(doc(db, 'usernames', cleanInput));
-        if (usernameSnap.exists()) {
-          const targetUid = usernameSnap.data().uid;
-          if (targetUid === user?.uid) {
-            setError('That is your own username.');
-          } else {
-            const profileSnap = await getDoc(doc(db, 'public_profiles', targetUid));
-            if (profileSnap.exists()) {
-              setResults([profileSnap.data() as UserProfile]);
-            }
-          }
-        } else {
-          setResults([]);
+      snap.forEach((docSnap) => {
+        const data = docSnap.data() as UserProfile;
+        if (data.uid === user?.uid) return;
+
+        const usernameSanitized = (data.username || '').toLowerCase().replace(/\s+/g, '');
+        const fullNameSanitized = (data.fullName || '').toLowerCase().replace(/\s+/g, '');
+
+        if (
+          usernameSanitized.includes(sanitized) ||
+          fullNameSanitized.includes(sanitized) ||
+          data.fullName.toLowerCase().includes(cleaned)
+        ) {
+          matches.push(data);
         }
-      }
+      });
+
+      // Limit results to maximum 5 as explicitly requested
+      setResults(matches.slice(0, 5));
     } catch (err: any) {
-      console.error('Search error:', err);
+      console.warn('Search error:', err);
       setError('Search could not be completed.');
     } finally {
       setLoading(false);
     }
   };
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      if (queryInput.trim()) {
+        performSearch(queryInput);
+      } else {
+        setResults([]);
+        setHasSearched(false);
+      }
+    }, 250);
+
+    return () => clearTimeout(timer);
+  }, [queryInput]);
 
   const handleStartChat = async (targetUid: string) => {
     try {
@@ -98,99 +102,79 @@ export const SearchView: React.FC<SearchViewProps> = ({ onSelectUser, onOpenQR }
   };
 
   return (
-    <div className="flex-1 overflow-y-auto p-4 md:p-8 bg-white dark:bg-[#09090b] max-w-2xl mx-auto space-y-6 text-neutral-900 dark:text-neutral-100">
+    <div className="flex-1 h-full overflow-y-auto p-4 sm:p-8 bg-white dark:bg-[#09090b] text-neutral-900 dark:text-neutral-100 max-w-2xl mx-auto space-y-6">
       {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-3 border-b border-neutral-200 dark:border-neutral-800">
+      <div className="flex items-center justify-between pb-3 border-b border-neutral-200 dark:border-neutral-800">
         <div>
-          <h2 className="text-xl font-bold tracking-tight">Search & Connections</h2>
+          <h1 className="text-xl font-bold tracking-tight">Search Directory</h1>
           <p className="text-xs text-neutral-500 dark:text-neutral-400">
-            Find contacts by username or connect using QR codes
+            Find contacts live or scan QR codes to start an end-to-end encrypted chat
           </p>
         </div>
 
         <button
           onClick={onOpenQR}
-          className="px-3.5 py-2 bg-neutral-900 dark:bg-white text-white dark:text-neutral-900 text-xs font-bold rounded-xl flex items-center justify-center space-x-1.5 shadow-sm transition-colors"
+          className="px-3.5 py-2 bg-neutral-900 hover:bg-neutral-800 dark:bg-white dark:hover:bg-neutral-200 text-white dark:text-neutral-900 text-xs font-bold rounded-xl flex items-center space-x-1.5 shadow-xs transition-colors shrink-0"
         >
           <QrCode className="w-4 h-4" />
           <span>My QR Code</span>
         </button>
       </div>
 
-      {/* Tabs */}
-      <div className="flex p-1 bg-neutral-100 dark:bg-[#18181b] rounded-xl border border-neutral-200 dark:border-neutral-800">
-        <button
-          onClick={() => {
-            setActiveTab('public');
-            setResults([]);
-            setSearched(false);
-          }}
-          className={`flex-1 py-2 rounded-lg text-xs font-semibold flex items-center justify-center space-x-1.5 transition-all ${
-            activeTab === 'public'
-              ? 'bg-white dark:bg-[#09090b] text-neutral-900 dark:text-white shadow-xs'
-              : 'text-neutral-500 hover:text-neutral-900 dark:hover:text-white'
-          }`}
-        >
-          <Globe className="w-3.5 h-3.5" />
-          <span>Public Directory</span>
-        </button>
-
-        <button
-          onClick={() => {
-            setActiveTab('exactPrivate');
-            setResults([]);
-            setSearched(false);
-          }}
-          className={`flex-1 py-2 rounded-lg text-xs font-semibold flex items-center justify-center space-x-1.5 transition-all ${
-            activeTab === 'exactPrivate'
-              ? 'bg-white dark:bg-[#09090b] text-neutral-900 dark:text-white shadow-xs'
-              : 'text-neutral-500 hover:text-neutral-900 dark:hover:text-white'
-          }`}
-        >
-          <Lock className="w-3.5 h-3.5" />
-          <span>Private Exact Lookup</span>
-        </button>
+      {/* Unified Search Input (Space-insensitive) */}
+      <div className="relative">
+        <Search className="w-4 h-4 text-neutral-400 absolute left-3.5 top-3 pointer-events-none" />
+        <input
+          type="text"
+          value={queryInput}
+          onChange={(e) => setQueryInput(e.target.value)}
+          placeholder="Search by username or name (e.g. akshatpopat)..."
+          className="w-full pl-9 pr-4 py-2.5 bg-neutral-100 dark:bg-[#18181b] rounded-xl text-xs text-neutral-900 dark:text-white border border-neutral-200 dark:border-neutral-800 focus:outline-none focus:border-neutral-900 dark:focus:border-white transition-colors"
+        />
       </div>
 
-      {/* Search Input */}
-      <form onSubmit={handleSearch} className="flex gap-2">
-        <div className="relative flex-1">
-          <Search className="w-4 h-4 text-neutral-400 absolute left-3.5 top-2.5 pointer-events-none" />
-          <input
-            type="text"
-            value={queryInput}
-            onChange={(e) => setQueryInput(e.target.value)}
-            placeholder={
-              activeTab === 'public'
-                ? 'Search public names or usernames...'
-                : 'Enter exact private username (e.g. akshatpopat)'
-            }
-            className="w-full pl-9 pr-3 py-2 bg-neutral-100 dark:bg-[#18181b] rounded-xl text-xs text-neutral-900 dark:text-white border border-neutral-200 dark:border-neutral-800 focus:outline-none"
-          />
-        </div>
-
-        <button
-          type="submit"
-          disabled={loading || !queryInput.trim()}
-          className="px-4 py-2 bg-neutral-900 dark:bg-white text-white dark:text-neutral-900 text-xs font-bold rounded-xl transition-colors shadow-xs disabled:opacity-40"
-        >
-          {loading ? 'Searching...' : 'Search'}
-        </button>
-      </form>
-
       {error && (
-        <div className="p-3 bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-800/50 rounded-xl text-xs text-rose-600 dark:text-rose-400">
-          {error}
+        <div className="p-3 bg-neutral-100 dark:bg-[#18181b] border border-neutral-300 dark:border-neutral-700 rounded-xl text-xs text-neutral-900 dark:text-neutral-100 flex items-center space-x-2">
+          <AlertCircle className="w-4 h-4 shrink-0 text-neutral-500" />
+          <span>{error}</span>
         </div>
       )}
 
-      {/* Results */}
-      <div className="space-y-2">
-        {searched && results.length === 0 && !loading && (
-          <div className="text-center py-8 px-4 bg-neutral-50 dark:bg-[#121215] rounded-2xl border border-neutral-200 dark:border-neutral-800">
-            <p className="text-xs font-semibold text-neutral-600 dark:text-neutral-400">No account found</p>
-            <p className="text-[11px] text-neutral-400 mt-1">
-              Verify the exact username or connect via QR code.
+      {/* Results Header */}
+      {hasSearched && (
+        <div className="flex items-center justify-between text-xs text-neutral-500">
+          <span>
+            {loading ? 'Searching live directory...' : `Found ${results.length} ${results.length === 1 ? 'account' : 'accounts'} (max 5)`}
+          </span>
+          {results.length === 5 && (
+            <span className="text-[10px] text-neutral-400">
+              Refine your query for more specific accounts
+            </span>
+          )}
+        </div>
+      )}
+
+      {/* Results List */}
+      <div className="space-y-2.5">
+        {!hasSearched && (
+          <div className="text-center py-12 px-4 bg-neutral-50 dark:bg-[#121215] rounded-2xl border border-neutral-200 dark:border-neutral-800 space-y-2">
+            <Search className="w-8 h-8 text-neutral-400 mx-auto" />
+            <h3 className="text-xs font-bold text-neutral-700 dark:text-neutral-300">
+              Live Public Directory Search
+            </h3>
+            <p className="text-[11px] text-neutral-500 dark:text-neutral-400 max-w-sm mx-auto">
+              Type any name or username to search live accounts. All new accounts are immediately discoverable.
+            </p>
+          </div>
+        )}
+
+        {hasSearched && results.length === 0 && !loading && (
+          <div className="text-center py-10 px-4 bg-neutral-50 dark:bg-[#121215] rounded-2xl border border-neutral-200 dark:border-neutral-800 space-y-1">
+            <p className="text-xs font-bold text-neutral-700 dark:text-neutral-300">
+              No account found matching "{queryInput}"
+            </p>
+            <p className="text-[11px] text-neutral-400">
+              Check spelling or ask the contact for their direct link ({window.location.origin}/username)
             </p>
           </div>
         )}
@@ -200,31 +184,35 @@ export const SearchView: React.FC<SearchViewProps> = ({ onSelectUser, onOpenQR }
           return (
             <div
               key={u.uid}
-              className="p-3.5 bg-neutral-50 dark:bg-[#121215] rounded-2xl border border-neutral-200 dark:border-neutral-800 flex items-center justify-between hover:border-neutral-400 transition-colors"
+              className="p-3.5 bg-neutral-50 dark:bg-[#121215] rounded-2xl border border-neutral-200 dark:border-neutral-800 flex items-center justify-between hover:border-neutral-400 dark:hover:border-neutral-600 transition-colors"
             >
-              <div className="flex items-center space-x-3.5">
+              <div className="flex items-center space-x-3.5 min-w-0">
                 {hasPhoto ? (
                   <img
                     src={u.photoURL}
                     alt={u.fullName}
-                    className="w-11 h-11 rounded-full object-cover border border-neutral-300 dark:border-neutral-700"
+                    className="w-11 h-11 rounded-full object-cover border border-neutral-300 dark:border-neutral-700 shrink-0"
                   />
                 ) : (
-                  <div className="w-11 h-11 rounded-full bg-neutral-900 dark:bg-white text-white dark:text-neutral-900 flex items-center justify-center font-bold text-xs select-none">
+                  <div className="w-11 h-11 rounded-full bg-neutral-900 dark:bg-white text-white dark:text-neutral-900 flex items-center justify-center font-bold text-xs select-none shrink-0">
                     {getInitials(u.fullName)}
                   </div>
                 )}
-                <div>
-                  <h4 className="font-semibold text-sm">{u.fullName}</h4>
-                  <p className="text-xs text-neutral-400 font-mono">@{u.username}</p>
+                <div className="min-w-0">
+                  <h4 className="font-semibold text-xs text-neutral-900 dark:text-white truncate">
+                    {u.fullName}
+                  </h4>
+                  <p className="text-[11px] text-neutral-500 font-mono truncate">
+                    @{u.username}
+                  </p>
                 </div>
               </div>
 
               <button
                 onClick={() => handleStartChat(u.uid)}
-                className="px-3.5 py-1.5 bg-neutral-900 dark:bg-white text-white dark:text-neutral-900 text-xs font-bold rounded-lg shadow-xs flex items-center space-x-1 transition-colors"
+                className="px-3.5 py-1.5 bg-neutral-900 hover:bg-neutral-800 dark:bg-white dark:hover:bg-neutral-200 text-white dark:text-neutral-900 text-xs font-bold rounded-lg shadow-xs flex items-center space-x-1.5 transition-colors shrink-0"
               >
-                <UserPlus className="w-3.5 h-3.5" />
+                <MessageSquare className="w-3.5 h-3.5" />
                 <span>Message</span>
               </button>
             </div>
