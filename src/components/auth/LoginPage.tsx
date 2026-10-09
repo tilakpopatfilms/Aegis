@@ -51,9 +51,9 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onNavigate }) => {
   };
 
   return (
-    <div className="min-h-[100dvh] w-full bg-white dark:bg-[#09090b] text-neutral-900 dark:text-neutral-100 flex flex-col justify-between p-4 sm:p-8">
+    <div className="min-h-screen w-full bg-white dark:bg-[#09090b] text-neutral-900 dark:text-neutral-100 flex flex-col p-4 sm:p-8 overflow-y-auto">
       {/* Top Bar */}
-      <div className="w-full max-w-md mx-auto flex items-center justify-between">
+      <div className="w-full max-w-md mx-auto flex items-center justify-between shrink-0">
         <button
           onClick={() => onNavigate('/chat')}
           className="flex items-center space-x-1.5 text-xs font-semibold text-neutral-500 hover:text-neutral-900 dark:hover:text-white transition-colors"
@@ -71,7 +71,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onNavigate }) => {
       </div>
 
       {/* Main Login Form Container */}
-      <div className="w-full max-w-md mx-auto my-auto py-8">
+      <div className="w-full max-w-md mx-auto my-auto py-6 shrink-0">
         <div className="bg-neutral-50 dark:bg-[#121215] border border-neutral-200 dark:border-neutral-800 rounded-3xl p-6 sm:p-8 space-y-6 shadow-xs">
           <div className="space-y-1.5 text-center">
             <h1 className="text-2xl font-bold tracking-tight text-neutral-900 dark:text-white">
@@ -105,7 +105,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onNavigate }) => {
                   autoFocus
                   value={username}
                   onChange={(e) => setUsername(e.target.value.toLowerCase().replace(/\s+/g, ''))}
-                  placeholder="akshatpopat"
+                  placeholder="username"
                   className="w-full pl-8 pr-3.5 py-2.5 bg-white dark:bg-[#18181b] rounded-xl text-xs text-neutral-900 dark:text-white border border-neutral-300 dark:border-neutral-700 focus:outline-none focus:border-neutral-900 dark:focus:border-white transition-colors"
                 />
               </div>

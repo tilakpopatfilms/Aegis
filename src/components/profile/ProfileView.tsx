@@ -15,6 +15,7 @@ import {
   Save,
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
+import { PWAInstallButton } from '../pwa/PWAInstallButton';
 
 export const ProfileView: React.FC = () => {
   const {
@@ -298,7 +299,7 @@ export const ProfileView: React.FC = () => {
         </div>
       </div>
 
-      {/* Account Direct Chat Link (e.g. domain.com/akshatpopat) */}
+      {/* Account Direct Chat Link */}
       <div className="p-6 bg-neutral-50 dark:bg-[#121215] rounded-3xl border border-neutral-200 dark:border-neutral-800 space-y-3">
         <div className="flex items-center space-x-2.5">
           <LinkIcon className="w-4 h-4 text-neutral-700 dark:text-neutral-300" />
@@ -433,6 +434,18 @@ export const ProfileView: React.FC = () => {
             </button>
           )}
         </div>
+      </div>
+
+      {/* PWA Install Card */}
+      <div className="p-6 bg-neutral-50 dark:bg-[#121215] rounded-3xl border border-neutral-200 dark:border-neutral-800 space-y-3">
+        <div className="flex items-center space-x-2.5">
+          <Smartphone className="w-4 h-4 text-neutral-700 dark:text-neutral-300" />
+          <h3 className="font-bold text-sm">Standalone Application</h3>
+        </div>
+        <p className="text-xs text-neutral-500 dark:text-neutral-400">
+          Install Aegis to your home screen or desktop dock for an app-like experience with offline message review.
+        </p>
+        <PWAInstallButton variant="full" />
       </div>
 
       {/* Session Details & Logout */}

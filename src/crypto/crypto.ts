@@ -29,6 +29,18 @@ export function generateIdentityKeyPair(): { publicKey: string; privateKey: stri
   };
 }
 
+// Derive public key from existing Curve25519 private key
+export function getPublicKeyFromPrivateKey(privateKeyBase64: string): string {
+  try {
+    const secretKey = decodeBase64(privateKeyBase64);
+    const keyPair = nacl.box.keyPair.fromSecretKey(secretKey);
+    return encodeBase64(keyPair.publicKey);
+  } catch (err) {
+    console.warn('Failed to derive public key from secret key:', err);
+    return '';
+  }
+}
+
 // Convert string password to WebCrypto CryptoKey via PBKDF2
 export async function deriveKeyFromPassword(password: string, salt: Uint8Array): Promise<CryptoKey> {
   const enc = new TextEncoder();

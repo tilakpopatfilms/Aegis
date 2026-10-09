@@ -163,15 +163,47 @@ export async function deleteLocalConversation(id: string): Promise<void> {
   }
 }
 
-// Key Store API
+// Key Store API (Dual Persistence: IndexedDB + localStorage fallback)
 export async function saveKeyStoreItem(id: string, data: string, iv?: string, salt?: string): Promise<void> {
-  const db = await getLocalDB();
-  await db.put('keyStore', { id, data, iv, salt });
+  const item = { id, data, iv, salt };
+  try {
+    localStorage.setItem(`aegis_keystore_${id}`, JSON.stringify(item));
+    if (id === 'plainPrivateKey') {
+      localStorage.setItem('aegis_plain_priv_key', data);
+    }
+  } catch (e) {}
+
+  try {
+    const db = await getLocalDB();
+    await db.put('keyStore', item);
+  } catch (e) {
+    console.warn('IndexedDB saveKeyStoreItem notice:', e);
+  }
 }
 
 export async function getKeyStoreItem(id: string): Promise<{ id: string; data: string; iv?: string; salt?: string } | undefined> {
-  const db = await getLocalDB();
-  return db.get('keyStore', id);
+  // 1. Try IndexedDB
+  try {
+    const db = await getLocalDB();
+    const item = await db.get('keyStore', id);
+    if (item?.data) return item;
+  } catch (e) {}
+
+  // 2. Try localStorage fallback
+  try {
+    const raw = localStorage.getItem(`aegis_keystore_${id}`);
+    if (raw) {
+      return JSON.parse(raw);
+    }
+    if (id === 'plainPrivateKey') {
+      const fallbackPlain = localStorage.getItem('aegis_plain_priv_key');
+      if (fallbackPlain) {
+        return { id: 'plainPrivateKey', data: fallbackPlain };
+      }
+    }
+  } catch (e) {}
+
+  return undefined;
 }
 
 // Contacts Safety Numbers API

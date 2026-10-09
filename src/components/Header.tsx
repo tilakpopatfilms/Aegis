@@ -2,6 +2,7 @@ import React from 'react';
 import { Shield, Lock, MessageSquare, Search, User, LogOut } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { ThemeToggle } from './common/ThemeToggle';
+import { PWAInstallButton } from './pwa/PWAInstallButton';
 
 interface HeaderProps {
   currentPath: string;
@@ -90,6 +91,9 @@ export const Header: React.FC<HeaderProps> = ({ currentPath, onNavigate }) => {
 
         {/* Right side controls */}
         <div className="flex items-center space-x-2">
+          {/* In-App PWA Install Button */}
+          <PWAInstallButton />
+
           <ThemeToggle />
 
           {user && profile ? (

@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Shield, MessageSquare, ArrowLeft, Lock, UserCheck, AlertCircle } from 'lucide-react';
+import { Shield, Lock, ArrowLeft, AlertCircle } from 'lucide-react';
 import { doc, getDoc } from 'firebase/firestore';
 import { db } from '../../firebase';
 import { useAuth } from '../../context/AuthContext';
@@ -15,13 +15,20 @@ export const DirectChatInvitePage: React.FC<DirectChatInvitePageProps> = ({
   targetUsername,
   onNavigate,
 }) => {
-  const { user, profile } = useAuth();
+  const { user, login } = useAuth();
   const { startOrGetConversation } = useChat();
 
   const [targetProfile, setTargetProfile] = useState<UserProfile | null>(null);
   const [loading, setLoading] = useState(true);
   const [notFound, setNotFound] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Direct Sign-in Form State for unauthenticated visitors
+  const [myUsername, setMyUsername] = useState('');
+  const [myCredential, setMyCredential] = useState('');
+  const [keepSignedIn, setKeepSignedIn] = useState(true);
+  const [loginLoading, setLoginLoading] = useState(false);
+  const [loginError, setLoginError] = useState<string | null>(null);
 
   const cleanTarget = targetUsername.toLowerCase().replace(/\s+/g, '');
 
@@ -72,9 +79,36 @@ export const DirectChatInvitePage: React.FC<DirectChatInvitePageProps> = ({
     resolveUser();
   }, [cleanTarget, user]);
 
-  const handleSignInToChat = () => {
-    localStorage.setItem('aegis_pending_chat_username', cleanTarget);
-    onNavigate('/login');
+  const handleDirectSignIn = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setLoginError(null);
+
+    const cleanMyUser = myUsername.trim().toLowerCase();
+    const cleanCred = myCredential.trim();
+
+    if (!cleanMyUser) {
+      setLoginError('Please enter your username.');
+      return;
+    }
+
+    if (!cleanCred) {
+      setLoginError('Please enter your password or Security Key.');
+      return;
+    }
+
+    setLoginLoading(true);
+    try {
+      await login(cleanMyUser, cleanCred, keepSignedIn);
+      // Once signed in, resolve target UID and open chat
+      if (targetProfile) {
+        await startOrGetConversation(targetProfile.uid);
+      }
+      onNavigate('/chat');
+    } catch (err: any) {
+      setLoginError(err.message || 'Sign in failed. Please check credentials.');
+    } finally {
+      setLoginLoading(false);
+    }
   };
 
   const handleRegisterToChat = () => {
@@ -101,7 +135,7 @@ export const DirectChatInvitePage: React.FC<DirectChatInvitePageProps> = ({
           <Shield className="w-5 h-5" />
         </div>
         <p className="text-xs font-semibold tracking-wider text-neutral-500">
-          Loading contact @{cleanTarget}...
+          Connecting to @{cleanTarget}...
         </p>
       </div>
     );
@@ -124,7 +158,7 @@ export const DirectChatInvitePage: React.FC<DirectChatInvitePageProps> = ({
           <AlertCircle className="w-10 h-10 text-neutral-400 mx-auto" />
           <h2 className="text-xl font-bold tracking-tight">Account Not Found</h2>
           <p className="text-xs text-neutral-500">
-            The account <span className="font-mono font-bold text-neutral-900 dark:text-white">@{cleanTarget}</span> does not exist or may have been deleted.
+            The account <span className="font-mono font-bold text-neutral-900 dark:text-white">@{cleanTarget}</span> does not exist or may have been removed.
           </p>
           <button
             onClick={() => onNavigate('/chat')}
@@ -141,8 +175,9 @@ export const DirectChatInvitePage: React.FC<DirectChatInvitePageProps> = ({
     );
   }
 
+  // Unauthenticated visitor view: Direct Sign In page with recipient context
   return (
-    <div className="min-h-[100dvh] w-full bg-white dark:bg-[#09090b] text-neutral-900 dark:text-neutral-100 flex flex-col justify-between p-6 sm:p-8">
+    <div className="min-h-[100dvh] w-full bg-white dark:bg-[#09090b] text-neutral-900 dark:text-neutral-100 flex flex-col justify-between p-4 sm:p-8">
       {/* Top Header */}
       <div className="w-full max-w-md mx-auto flex items-center justify-between">
         <button
@@ -161,60 +196,118 @@ export const DirectChatInvitePage: React.FC<DirectChatInvitePageProps> = ({
         </div>
       </div>
 
-      {/* Target User Invite Card */}
-      <div className="w-full max-w-md mx-auto my-auto py-8">
-        <div className="bg-neutral-50 dark:bg-[#121215] border border-neutral-200 dark:border-neutral-800 rounded-3xl p-6 sm:p-8 space-y-6 text-center shadow-xs">
-          <div className="space-y-3">
+      {/* Target Recipient Card & Sign In Form */}
+      <div className="w-full max-w-md mx-auto my-auto py-6">
+        <div className="bg-neutral-50 dark:bg-[#121215] border border-neutral-200 dark:border-neutral-800 rounded-3xl p-6 sm:p-8 space-y-5 shadow-xs">
+          {/* Recipient Badge */}
+          <div className="flex items-center space-x-3 pb-4 border-b border-neutral-200 dark:border-neutral-800">
             {hasPhoto ? (
               <img
                 src={targetProfile.photoURL}
                 alt={targetProfile.fullName}
-                className="w-20 h-20 rounded-full object-cover mx-auto border-2 border-neutral-300 dark:border-neutral-700 shadow-xs"
+                className="w-12 h-12 rounded-full object-cover border border-neutral-300 dark:border-neutral-700 shrink-0"
               />
             ) : (
-              <div className="w-20 h-20 rounded-full bg-neutral-900 dark:bg-white text-white dark:text-neutral-900 flex items-center justify-center font-bold text-2xl mx-auto shadow-xs select-none">
+              <div className="w-12 h-12 rounded-full bg-neutral-900 dark:bg-white text-white dark:text-neutral-900 flex items-center justify-center font-bold text-sm shrink-0 select-none">
                 {initials}
               </div>
             )}
-
-            <div>
-              <h1 className="text-xl font-bold tracking-tight text-neutral-900 dark:text-white">
-                {targetProfile.fullName}
-              </h1>
-              <p className="text-xs text-neutral-500 font-mono mt-0.5">
-                @{targetProfile.username}
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center space-x-1.5">
+                <h2 className="text-sm font-bold truncate text-neutral-900 dark:text-white">
+                  {targetProfile.fullName}
+                </h2>
+                <span className="text-[10px] text-neutral-500 font-mono">
+                  @{targetProfile.username}
+                </span>
+              </div>
+              <p className="text-[11px] text-neutral-500 truncate">
+                {targetProfile.bio || 'Available • End-to-end encrypted'}
               </p>
             </div>
-
-            <p className="text-xs text-neutral-600 dark:text-neutral-400 italic max-w-xs mx-auto">
-              "{targetProfile.bio || 'Available • End-to-end encrypted'}"
-            </p>
           </div>
 
-          <div className="p-3.5 bg-white dark:bg-[#18181b] rounded-2xl border border-neutral-200 dark:border-neutral-800 space-y-1 text-left">
-            <div className="flex items-center space-x-1.5 text-xs font-bold text-neutral-900 dark:text-white">
-              <Lock className="w-3.5 h-3.5" />
-              <span>Direct Encrypted Chat</span>
-            </div>
-            <p className="text-[11px] text-neutral-500 leading-relaxed">
-              Connect directly with @{targetProfile.username}. Messages are encrypted on your device and can only be decrypted by the recipient.
-            </p>
-          </div>
-
-          {/* Action Buttons */}
-          <div className="space-y-2.5 pt-2">
-            <button
-              onClick={handleSignInToChat}
-              className="w-full py-3 bg-neutral-900 hover:bg-neutral-800 dark:bg-white dark:hover:bg-neutral-200 text-white dark:text-neutral-900 font-bold text-xs rounded-xl transition-all shadow-xs"
-            >
+          <div className="space-y-1">
+            <h1 className="text-xl font-bold tracking-tight text-neutral-900 dark:text-white">
               Sign In to Chat with @{targetProfile.username}
-            </button>
+            </h1>
+            <p className="text-xs text-neutral-500 dark:text-neutral-400">
+              Only signed-in accounts can start an encrypted chat with this user.
+            </p>
+          </div>
 
+          {loginError && (
+            <div className="p-3 bg-neutral-100 dark:bg-[#1a1a1f] border border-neutral-300 dark:border-neutral-700 rounded-xl text-xs text-neutral-900 dark:text-neutral-100 flex items-start space-x-2">
+              <AlertCircle className="w-4 h-4 shrink-0 text-neutral-500 mt-0.5" />
+              <span>{loginError}</span>
+            </div>
+          )}
+
+          <form onSubmit={handleDirectSignIn} className="space-y-3.5">
+            <div className="space-y-1">
+              <label className="text-xs font-semibold text-neutral-700 dark:text-neutral-300">
+                Your Username
+              </label>
+              <div className="relative">
+                <span className="absolute left-3.5 top-2.5 text-xs text-neutral-400 font-mono select-none">
+                  @
+                </span>
+                <input
+                  type="text"
+                  required
+                  value={myUsername}
+                  onChange={(e) => setMyUsername(e.target.value)}
+                  placeholder="username"
+                  className="w-full pl-8 pr-3.5 py-2.5 bg-white dark:bg-[#18181b] rounded-xl text-xs border border-neutral-300 dark:border-neutral-700 focus:outline-none"
+                />
+              </div>
+            </div>
+
+            <div className="space-y-1">
+              <label className="text-xs font-semibold text-neutral-700 dark:text-neutral-300">
+                Password or Security Key
+              </label>
+              <input
+                type="password"
+                required
+                value={myCredential}
+                onChange={(e) => setMyCredential(e.target.value)}
+                placeholder="Password or ABCD-EFGH-IJKL"
+                className="w-full px-3.5 py-2.5 bg-white dark:bg-[#18181b] rounded-xl text-xs border border-neutral-300 dark:border-neutral-700 focus:outline-none"
+              />
+            </div>
+
+            <div className="flex items-center space-x-2 pt-1">
+              <input
+                type="checkbox"
+                id="directKeepSigned"
+                checked={keepSignedIn}
+                onChange={(e) => setKeepSignedIn(e.target.checked)}
+                className="rounded border-neutral-300 dark:border-neutral-700 text-neutral-900 focus:ring-0"
+              />
+              <label htmlFor="directKeepSigned" className="text-xs text-neutral-600 dark:text-neutral-400 cursor-pointer">
+                Keep me signed in
+              </label>
+            </div>
+
+            <button
+              type="submit"
+              disabled={loginLoading}
+              className="w-full py-3 bg-neutral-900 hover:bg-neutral-800 dark:bg-white dark:hover:bg-neutral-200 text-white dark:text-neutral-900 font-bold text-xs rounded-xl transition-all shadow-xs disabled:opacity-50"
+            >
+              {loginLoading ? 'Signing in & Opening Chat...' : `Sign In & Chat with @${targetProfile.username}`}
+            </button>
+          </form>
+
+          <div className="pt-2 border-t border-neutral-200 dark:border-neutral-800 text-center">
+            <p className="text-xs text-neutral-500">
+              Don't have an Aegis account yet?
+            </p>
             <button
               onClick={handleRegisterToChat}
-              className="w-full py-3 bg-neutral-200 hover:bg-neutral-300 dark:bg-neutral-800 dark:hover:bg-neutral-700 text-neutral-900 dark:text-white font-bold text-xs rounded-xl transition-colors"
+              className="mt-2 w-full py-2.5 border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-[#18181b] hover:bg-neutral-100 dark:hover:bg-[#202024] text-neutral-900 dark:text-white font-bold text-xs rounded-xl transition-colors"
             >
-              Create Account to Chat
+              Create Account
             </button>
           </div>
         </div>
@@ -222,7 +315,7 @@ export const DirectChatInvitePage: React.FC<DirectChatInvitePageProps> = ({
 
       {/* Footer Info */}
       <div className="text-center text-[11px] text-neutral-400">
-        Aegis • Zero Server Plaintext • Private by Design
+        Aegis • Zero Plaintext on Cloud • Private by Design
       </div>
     </div>
   );

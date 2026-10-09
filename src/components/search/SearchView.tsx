@@ -128,7 +128,7 @@ export const SearchView: React.FC<SearchViewProps> = ({ onSelectUser, onOpenQR }
           type="text"
           value={queryInput}
           onChange={(e) => setQueryInput(e.target.value)}
-          placeholder="Search by username or name (e.g. akshatpopat)..."
+          placeholder="Search by username or display name..."
           className="w-full pl-9 pr-4 py-2.5 bg-neutral-100 dark:bg-[#18181b] rounded-xl text-xs text-neutral-900 dark:text-white border border-neutral-200 dark:border-neutral-800 focus:outline-none focus:border-neutral-900 dark:focus:border-white transition-colors"
         />
       </div>

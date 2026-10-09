@@ -86,7 +86,7 @@ export interface DecryptedMessage {
   recipientUid: string;
   content: PlaintextMessageContent;
   ephemeralType: EphemeralSetting;
-  status: 'sending' | 'delivered' | 'read' | 'expired';
+  status: 'sending' | 'sent' | 'delivered' | 'read' | 'expired';
   timestamp: string;
   expiresAtTimestamp?: number; // UNIX ms for expiration
   reactions?: Record<string, string[]>;

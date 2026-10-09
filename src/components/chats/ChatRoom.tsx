@@ -15,10 +15,11 @@ import {
   ArrowLeft,
   ShieldCheck,
   Link as LinkIcon,
+  AlertCircle,
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { useChat } from '../../context/ChatContext';
-import { EphemeralSetting, DecryptedMessage } from '../../types';
+import { EphemeralSetting, DecryptedMessage, UserProfile } from '../../types';
 import { generateSafetyNumber } from '../../crypto/crypto';
 import { saveSafetyNumber, getSafetyNumber } from '../../db/localDb';
 
@@ -51,6 +52,8 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({ onBack }) => {
   const [selectedImageFull, setSelectedImageFull] = useState<string | null>(null);
   const [starredMsgIds, setStarredMsgIds] = useState<Set<string>>(new Set());
   const [copiedLinkNotice, setCopiedLinkNotice] = useState(false);
+  const [sending, setSending] = useState(false);
+  const [sendError, setSendError] = useState<string | null>(null);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -79,7 +82,7 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({ onBack }) => {
     loadSafety();
   }, [profile, selectedConversation]);
 
-  if (!selectedConversation || !selectedConversation.otherUser) {
+  if (!selectedConversation) {
     return (
       <div className="flex-1 h-full flex flex-col items-center justify-center p-8 text-center bg-white dark:bg-[#0c0c0e] text-neutral-800 dark:text-neutral-200">
         <div className="w-14 h-14 rounded-full bg-neutral-100 dark:bg-[#18181b] text-neutral-900 dark:text-white flex items-center justify-center mb-3 border border-neutral-200 dark:border-neutral-800">
@@ -93,25 +96,49 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({ onBack }) => {
     );
   }
 
-  const otherUser = selectedConversation.otherUser;
+  const otherUid = selectedConversation.participants.find((p) => p !== user?.uid) || '';
+  const otherUser: UserProfile = selectedConversation.otherUser || {
+    uid: otherUid,
+    username: otherUid.replace(/^usr_/, '').split('_')[0] || 'contact',
+    fullName: otherUid.replace(/^usr_/, '').split('_')[0] || 'Encrypted Contact',
+    accountType: 'public',
+    publicKey: '',
+    createdAt: new Date().toISOString(),
+  };
 
   const handleSendText = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
-    if (!textInput.trim()) return;
+    if (!textInput.trim() || sending) return;
 
     const textToSend = textInput.trim();
     setTextInput('');
+    setSendError(null);
     const replyId = replyingTo?.id;
     setReplyingTo(null);
 
-    await sendTextMessage(textToSend, replyId);
-    inputRef.current?.focus();
+    setSending(true);
+    try {
+      await sendTextMessage(textToSend, replyId);
+    } catch (err: any) {
+      console.warn('Failed to send text message:', err);
+      setTextInput(textToSend);
+      setSendError(err.message || 'Failed to send message. Please retry.');
+    } finally {
+      setSending(false);
+      inputRef.current?.focus();
+    }
   };
 
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
       const file = e.target.files[0];
-      await sendImageMessage(file);
+      setSendError(null);
+      try {
+        await sendImageMessage(file);
+      } catch (err: any) {
+        console.warn('Failed to send image message:', err);
+        setSendError(err.message || 'Failed to send image.');
+      }
     }
   };
 
@@ -152,7 +179,7 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({ onBack }) => {
     ? otherUser.fullName
         .split(' ')
         .filter(Boolean)
-        .map((p) => p[0])
+        .map((p: string) => p[0])
         .join('')
         .toUpperCase()
         .slice(0, 2)
@@ -467,6 +494,23 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({ onBack }) => {
             className="p-1 text-neutral-400 hover:text-neutral-900 dark:hover:text-white"
           >
             <X className="w-4 h-4" />
+          </button>
+        </div>
+      )}
+
+      {/* Send Error Notice */}
+      {sendError && (
+        <div className="px-4 py-2 bg-neutral-100 dark:bg-[#1a1a1f] border-t border-neutral-300 dark:border-neutral-700 flex items-center justify-between text-xs text-neutral-800 dark:text-neutral-200">
+          <div className="flex items-center space-x-2">
+            <AlertCircle className="w-3.5 h-3.5 text-neutral-500" />
+            <span>{sendError}</span>
+          </div>
+          <button
+            type="button"
+            onClick={() => setSendError(null)}
+            className="text-neutral-400 hover:text-neutral-700 dark:hover:text-neutral-200 text-xs ml-2"
+          >
+            Dismiss
           </button>
         </div>
       )}

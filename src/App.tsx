@@ -11,6 +11,7 @@ import { LoginPage } from './components/auth/LoginPage';
 import { RegisterPage } from './components/auth/RegisterPage';
 import { DirectChatInvitePage } from './components/chats/DirectChatInvitePage';
 import { QRModal } from './components/qr/QRModal';
+import { OfflineIndicator } from './components/pwa/OfflineIndicator';
 import { Shield, Lock, Key, ArrowRight, MessageSquare } from 'lucide-react';
 
 const MainApp: React.FC = () => {
@@ -60,7 +61,7 @@ const MainApp: React.FC = () => {
     return <RegisterPage onNavigate={navigate} />;
   }
 
-  // Route 3: Direct User Link `/:username` (e.g. `/akshatpopat`)
+  // Route 3: Direct User Link `/:username`
   const isDirectUserRoute =
     currentPath !== '/' &&
     currentPath !== '/chat' &&
@@ -147,7 +148,11 @@ const MainApp: React.FC = () => {
         </main>
       ) : (
         /* Authenticated Main App: WhatsApp Layout */
-        <main className="flex-1 w-full max-w-6xl mx-auto flex flex-col md:flex-row overflow-hidden pb-14 sm:pb-0 sm:my-2 rounded-none sm:rounded-2xl border-0 sm:border border-neutral-200 dark:border-neutral-800">
+        <main
+          className={`flex-1 w-full max-w-6xl mx-auto flex flex-col md:flex-row overflow-hidden ${
+            selectedConversation ? 'pb-0' : 'pb-14'
+          } sm:pb-0 sm:my-2 rounded-none sm:rounded-2xl border-0 sm:border border-neutral-200 dark:border-neutral-800`}
+        >
           {(currentPath === '/chat' || currentPath === '/') && (
             <div className="flex-1 flex w-full h-full overflow-hidden">
               {/* Left Sidebar: Conversations List */}
@@ -187,13 +192,16 @@ const MainApp: React.FC = () => {
         </main>
       )}
 
-      {/* Mobile Bottom Navigation Bar */}
-      {user && (
+      {/* Mobile Bottom Navigation Bar (Hidden when inside active conversation) */}
+      {user && !selectedConversation && (
         <Navigation
           currentPath={currentPath}
           onNavigate={navigate}
         />
       )}
+
+      {/* Offline Status Notice */}
+      <OfflineIndicator />
 
       {/* Global QR Code Modal */}
       <QRModal
