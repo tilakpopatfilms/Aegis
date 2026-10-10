@@ -16,12 +16,19 @@ import {
   ShieldCheck,
   Link as LinkIcon,
   AlertCircle,
+  Download,
+  Smile,
+  Pin,
+  VolumeX,
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { useChat } from '../../context/ChatContext';
 import { EphemeralSetting, DecryptedMessage, UserProfile } from '../../types';
 import { generateSafetyNumber } from '../../crypto/crypto';
 import { saveSafetyNumber, getSafetyNumber } from '../../db/localDb';
+
+const PRIMARY_EMOJIS = ['👍', '🥳', '🔥', '❤️', '😡', '🙂'];
+const EXTENDED_EMOJIS = ['😂', '🙏', '👏', '🎉', '💔', '👀', '🚀', '💯', '✨', '⚡', '😍', '🤔'];
 
 interface ChatRoomProps {
   onBack?: () => void;
@@ -37,6 +44,9 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({ onBack }) => {
     updateEphemeralSetting,
     deleteMessageLocally,
     deleteConversationLocally,
+    addMessageReaction,
+    togglePinConversation,
+    toggleMuteConversation,
   } = useChat();
 
   const [textInput, setTextInput] = useState('');
@@ -52,8 +62,19 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({ onBack }) => {
   const [selectedImageFull, setSelectedImageFull] = useState<string | null>(null);
   const [starredMsgIds, setStarredMsgIds] = useState<Set<string>>(new Set());
   const [copiedLinkNotice, setCopiedLinkNotice] = useState(false);
+  const [copiedNotice, setCopiedNotice] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
+
+  // Reaction picker state
+  const [reactionPickerMsgId, setReactionPickerMsgId] = useState<string | null>(null);
+  const [showExtendedPicker, setShowExtendedPicker] = useState<boolean>(false);
+  const [customEmojiInput, setCustomEmojiInput] = useState<string>('');
+  const longPressTimerRef = useRef<any>(null);
+
+  // Swipe-to-reply touch tracking
+  const [swipeOffsets, setSwipeOffsets] = useState<Record<string, number>>({});
+  const touchStartRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -154,7 +175,73 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({ onBack }) => {
   const handleCopyText = (text?: string) => {
     if (text) {
       navigator.clipboard.writeText(text);
+      setCopiedNotice('Copied to clipboard');
+      setTimeout(() => setCopiedNotice(null), 2000);
     }
+  };
+
+  const handleDownloadImage = (e: React.MouseEvent, base64Url: string, fileName?: string) => {
+    e.stopPropagation();
+    try {
+      const a = document.createElement('a');
+      a.href = base64Url;
+      a.download = fileName || `aegis_image_${Date.now()}.jpg`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setCopiedNotice('Downloading image...');
+      setTimeout(() => setCopiedNotice(null), 2000);
+    } catch (err) {
+      console.warn('Image download failed:', err);
+    }
+  };
+
+  const handleTouchStart = (msgId: string, e: React.TouchEvent) => {
+    touchStartRef.current = {
+      x: e.touches[0].clientX,
+      y: e.touches[0].clientY,
+    };
+    if (longPressTimerRef.current) {
+      clearTimeout(longPressTimerRef.current);
+    }
+    longPressTimerRef.current = setTimeout(() => {
+      setReactionPickerMsgId(msgId);
+      setShowExtendedPicker(false);
+    }, 400);
+  };
+
+  const handleTouchMove = (msgId: string, e: React.TouchEvent) => {
+    const diffX = e.touches[0].clientX - touchStartRef.current.x;
+    const diffY = Math.abs(e.touches[0].clientY - touchStartRef.current.y);
+
+    if (Math.abs(diffX) > 10 || diffY > 10) {
+      if (longPressTimerRef.current) {
+        clearTimeout(longPressTimerRef.current);
+        longPressTimerRef.current = null;
+      }
+    }
+
+    if (diffX > 0 && diffX > diffY) {
+      const offset = Math.min(diffX * 0.6, 65);
+      setSwipeOffsets((prev) => ({ ...prev, [msgId]: offset }));
+    }
+  };
+
+  const handleTouchEnd = (m: DecryptedMessage) => {
+    if (longPressTimerRef.current) {
+      clearTimeout(longPressTimerRef.current);
+      longPressTimerRef.current = null;
+    }
+
+    const offset = swipeOffsets[m.id] || 0;
+    if (offset >= 35) {
+      setReplyingTo(m);
+    }
+    setSwipeOffsets((prev) => {
+      const next = { ...prev };
+      delete next[m.id];
+      return next;
+    });
   };
 
   const handleCopyContactLink = () => {
@@ -298,61 +385,88 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({ onBack }) => {
 
       {/* Options Dropdown */}
       {showOptionsMenu && (
-        <div className="absolute top-14 right-3 z-30 bg-white dark:bg-[#18181b] rounded-2xl shadow-xl border border-neutral-200 dark:border-neutral-800 p-1.5 text-xs w-52 text-neutral-800 dark:text-neutral-200">
-          <button
-            onClick={() => {
-              setShowOptionsMenu(false);
-              setShowSafetyModal(true);
-            }}
-            className="w-full text-left px-3 py-2 rounded-lg hover:bg-neutral-100 dark:hover:bg-[#202024] flex items-center space-x-2"
-          >
-            <Shield className="w-3.5 h-3.5" />
-            <span>Verify Safety Number</span>
-          </button>
-          <button
-            onClick={handleCopyContactLink}
-            className="w-full text-left px-3 py-2 rounded-lg hover:bg-neutral-100 dark:hover:bg-[#202024] flex items-center space-x-2"
-          >
-            <LinkIcon className="w-3.5 h-3.5" />
-            <span>Copy Contact Account Link</span>
-          </button>
-          <button
-            onClick={() => {
-              setShowOptionsMenu(false);
-              setShowTimerMenu(true);
-            }}
-            className="w-full text-left px-3 py-2 rounded-lg hover:bg-neutral-100 dark:hover:bg-[#202024] flex items-center space-x-2"
-          >
-            <Clock className="w-3.5 h-3.5" />
-            <span>Disappearing messages</span>
-          </button>
-          <div className="border-t border-neutral-100 dark:border-neutral-800 my-1" />
-          <button
-            onClick={() => {
-              setShowOptionsMenu(false);
-              deleteConversationLocally(selectedConversation.id);
-            }}
-            className="w-full text-left px-3 py-2 rounded-lg hover:bg-neutral-100 dark:hover:bg-[#202024] text-rose-600 flex items-center space-x-2"
-          >
-            <Trash2 className="w-3.5 h-3.5" />
-            <span>Delete conversation</span>
-          </button>
+        <div className="absolute top-14 right-3 z-30 bg-[#18181b] rounded-2xl shadow-2xl border border-neutral-800 p-1.5 text-xs w-56 text-neutral-200 divide-y divide-neutral-800/80">
+          <div className="py-1">
+            <button
+              onClick={() => {
+                togglePinConversation(selectedConversation.id);
+                setShowOptionsMenu(false);
+              }}
+              className="w-full text-left px-3 py-2 rounded-lg hover:bg-[#202024] flex items-center space-x-2 transition-colors"
+            >
+              <Pin className={`w-3.5 h-3.5 ${selectedConversation.isPinned ? 'text-amber-500 fill-current' : ''}`} />
+              <span>{selectedConversation.isPinned ? 'Unpin chat' : 'Pin chat to top'}</span>
+            </button>
+            <button
+              onClick={() => {
+                toggleMuteConversation(selectedConversation.id);
+                setShowOptionsMenu(false);
+              }}
+              className="w-full text-left px-3 py-2 rounded-lg hover:bg-[#202024] flex items-center space-x-2 transition-colors"
+            >
+              <VolumeX className={`w-3.5 h-3.5 ${selectedConversation.isMuted ? 'text-rose-400' : ''}`} />
+              <span>{selectedConversation.isMuted ? 'Unmute notifications' : 'Mute chat'}</span>
+            </button>
+          </div>
+
+          <div className="py-1">
+            <button
+              onClick={() => {
+                setShowOptionsMenu(false);
+                setShowSafetyModal(true);
+              }}
+              className="w-full text-left px-3 py-2 rounded-lg hover:bg-[#202024] flex items-center space-x-2 transition-colors"
+            >
+              <Shield className="w-3.5 h-3.5" />
+              <span>Verify Safety Number</span>
+            </button>
+            <button
+              onClick={handleCopyContactLink}
+              className="w-full text-left px-3 py-2 rounded-lg hover:bg-[#202024] flex items-center space-x-2 transition-colors"
+            >
+              <LinkIcon className="w-3.5 h-3.5" />
+              <span>Copy Contact Account Link</span>
+            </button>
+            <button
+              onClick={() => {
+                setShowOptionsMenu(false);
+                setShowTimerMenu(true);
+              }}
+              className="w-full text-left px-3 py-2 rounded-lg hover:bg-[#202024] flex items-center space-x-2 transition-colors"
+            >
+              <Clock className="w-3.5 h-3.5" />
+              <span>Disappearing messages</span>
+            </button>
+          </div>
+
+          <div className="pt-1">
+            <button
+              onClick={() => {
+                setShowOptionsMenu(false);
+                deleteConversationLocally(selectedConversation.id);
+              }}
+              className="w-full text-left px-3 py-2 rounded-lg hover:bg-[#202024] text-rose-500 hover:text-rose-400 flex items-center space-x-2 transition-colors"
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+              <span>Delete conversation</span>
+            </button>
+          </div>
         </div>
       )}
 
-      {copiedLinkNotice && (
-        <div className="absolute top-16 left-1/2 -translate-x-1/2 z-30 px-3.5 py-1.5 bg-neutral-900 text-white text-xs rounded-xl shadow-lg">
-          Contact direct link copied!
+      {copiedNotice && (
+        <div className="absolute top-16 left-1/2 -translate-x-1/2 z-30 px-3.5 py-1.5 bg-neutral-900 border border-neutral-700 text-white text-xs rounded-xl shadow-xl animate-in fade-in zoom-in-95">
+          {copiedNotice}
         </div>
       )}
 
       {/* Main Messages Scroll Area */}
-      <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-3 min-h-0">
+      <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-4 min-h-0 bg-[#09090b]">
         {/* Encryption Header Notice */}
-        <div className="text-center py-4">
-          <div className="inline-flex items-center space-x-1.5 px-3.5 py-1 bg-neutral-100 dark:bg-[#18181b] border border-neutral-200 dark:border-neutral-800 rounded-full text-[11px] text-neutral-500">
-            <Shield className="w-3 h-3 text-neutral-700 dark:text-neutral-300" />
-            <span>Messages are end-to-end encrypted. No third party can read them.</span>
+        <div className="text-center py-2">
+          <div className="inline-flex items-center space-x-1.5 px-3.5 py-1 bg-[#121215] border border-neutral-800 rounded-full text-[11px] text-neutral-400 shadow-2xs">
+            <Shield className="w-3 h-3 text-emerald-400" />
+            <span>Messages are end-to-end encrypted. No cloud plaintext.</span>
           </div>
         </div>
 
@@ -361,30 +475,189 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({ onBack }) => {
           const isSender = m.senderUid === user?.uid;
           const isStarred = starredMsgIds.has(m.id);
           const replyParent = m.replyToId ? messages.find((p) => p.id === m.replyToId) : null;
+          const swipeOffset = swipeOffsets[m.id] || 0;
+          const isReactionPickerOpen = reactionPickerMsgId === m.id;
 
           return (
             <div
               key={m.id}
-              className={`group flex flex-col ${isSender ? 'items-end' : 'items-start'} space-y-1`}
+              className={`group relative flex flex-col ${isSender ? 'items-end' : 'items-start'} space-y-1`}
             >
-              {/* Message Bubble Container */}
+              {/* Swipe to reply sliding indicator */}
+              {swipeOffset > 8 && (
+                <div
+                  className="absolute left-2 top-1/2 -translate-y-1/2 w-8 h-8 rounded-full bg-neutral-800 border border-neutral-700 text-emerald-400 flex items-center justify-center transition-all shadow-md z-10 pointer-events-none"
+                  style={{
+                    opacity: Math.min(swipeOffset / 35, 1),
+                    transform: `translateY(-50%) scale(${Math.min(swipeOffset / 35, 1)})`,
+                  }}
+                >
+                  <CornerDownRight className="w-4 h-4" />
+                </div>
+              )}
+
+              {/* Reaction & Action Bar (WhatsApp style popup on click or hold) */}
+              {isReactionPickerOpen && (
+                <div
+                  className={`absolute -top-12 z-40 flex items-center space-x-1 p-1 bg-[#18181b] border border-neutral-700 rounded-full shadow-2xl animate-in zoom-in-95 duration-150 backdrop-blur-md ${
+                    isSender ? 'right-0' : 'left-0'
+                  }`}
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  {PRIMARY_EMOJIS.map((emoji) => (
+                    <button
+                      key={emoji}
+                      onClick={() => {
+                        addMessageReaction(m.id, emoji);
+                        setReactionPickerMsgId(null);
+                        setShowExtendedPicker(false);
+                      }}
+                      className="w-7 h-7 flex items-center justify-center text-sm hover:scale-130 active:scale-95 transition-transform rounded-full hover:bg-neutral-800"
+                      title={`React ${emoji}`}
+                    >
+                      {emoji}
+                    </button>
+                  ))}
+                  <button
+                    onClick={() => setShowExtendedPicker(!showExtendedPicker)}
+                    className="w-6 h-6 flex items-center justify-center text-xs font-bold text-neutral-400 hover:text-white rounded-full hover:bg-neutral-800"
+                    title="More & Custom Emojis"
+                  >
+                    +
+                  </button>
+
+                  <div className="h-4 w-[1px] bg-neutral-700 mx-0.5" />
+
+                  {/* Quick message actions within selection bar */}
+                  {m.content.text && (
+                    <button
+                      onClick={() => {
+                        handleCopyText(m.content.text);
+                        setReactionPickerMsgId(null);
+                      }}
+                      className="w-6 h-6 flex items-center justify-center text-neutral-400 hover:text-white rounded-full hover:bg-neutral-800"
+                      title="Copy message"
+                    >
+                      <Copy className="w-3 h-3" />
+                    </button>
+                  )}
+                  <button
+                    onClick={() => {
+                      setReplyingTo(m);
+                      setReactionPickerMsgId(null);
+                    }}
+                    className="w-6 h-6 flex items-center justify-center text-neutral-400 hover:text-white rounded-full hover:bg-neutral-800"
+                    title="Reply"
+                  >
+                    <CornerDownRight className="w-3 h-3" />
+                  </button>
+                  <button
+                    onClick={() => {
+                      handleToggleStar(m.id);
+                      setReactionPickerMsgId(null);
+                    }}
+                    className={`w-6 h-6 flex items-center justify-center rounded-full hover:bg-neutral-800 ${
+                      isStarred ? 'text-amber-400' : 'text-neutral-400 hover:text-white'
+                    }`}
+                    title="Star message"
+                  >
+                    <Star className="w-3 h-3" />
+                  </button>
+                  <button
+                    onClick={() => {
+                      deleteMessageLocally(m.id);
+                      setReactionPickerMsgId(null);
+                    }}
+                    className="w-6 h-6 flex items-center justify-center text-neutral-400 hover:text-rose-400 rounded-full hover:bg-neutral-800"
+                    title="Delete message"
+                  >
+                    <Trash2 className="w-3 h-3" />
+                  </button>
+
+                  {/* Extended Emoji Grid & Custom Emoji Input */}
+                  {showExtendedPicker && (
+                    <div className="absolute top-11 left-0 bg-[#1c1c20] border border-neutral-700 p-2.5 rounded-2xl shadow-2xl space-y-2 w-64 z-50 animate-in fade-in zoom-in-95">
+                      <div className="grid grid-cols-6 gap-1">
+                        {EXTENDED_EMOJIS.map((extEmoji) => (
+                          <button
+                            key={extEmoji}
+                            onClick={() => {
+                              addMessageReaction(m.id, extEmoji);
+                              setReactionPickerMsgId(null);
+                              setShowExtendedPicker(false);
+                            }}
+                            className="w-8 h-8 flex items-center justify-center text-sm hover:scale-125 transition-transform rounded-lg hover:bg-neutral-800"
+                          >
+                            {extEmoji}
+                          </button>
+                        ))}
+                      </div>
+
+                      {/* Custom Emoji / Reactor input */}
+                      <div className="flex items-center space-x-1.5 pt-1.5 border-t border-neutral-800">
+                        <input
+                          type="text"
+                          placeholder="Custom emoji..."
+                          maxLength={6}
+                          value={customEmojiInput}
+                          onChange={(e) => setCustomEmojiInput(e.target.value)}
+                          className="flex-1 px-2 py-1 bg-black rounded-lg text-xs text-white border border-neutral-700 focus:outline-none"
+                        />
+                        <button
+                          onClick={() => {
+                            if (customEmojiInput.trim()) {
+                              addMessageReaction(m.id, customEmojiInput.trim());
+                              setCustomEmojiInput('');
+                              setReactionPickerMsgId(null);
+                              setShowExtendedPicker(false);
+                            }
+                          }}
+                          className="px-2.5 py-1 bg-white text-black font-bold text-xs rounded-lg hover:bg-neutral-200"
+                        >
+                          React
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Message Bubble Container with touch gesture & click/hold selector */}
               <div
-                className={`relative px-3.5 py-2.5 rounded-2xl text-xs shadow-2xs max-w-[85%] sm:max-w-md ${
+                onClick={() => {
+                  setReactionPickerMsgId(reactionPickerMsgId === m.id ? null : m.id);
+                  setShowExtendedPicker(false);
+                }}
+                onContextMenu={(e) => {
+                  e.preventDefault();
+                  setReactionPickerMsgId(m.id);
+                  setShowExtendedPicker(false);
+                }}
+                onTouchStart={(e) => handleTouchStart(m.id, e)}
+                onTouchMove={(e) => handleTouchMove(m.id, e)}
+                onTouchEnd={() => handleTouchEnd(m)}
+                style={{
+                  transform: swipeOffset > 0 ? `translateX(${swipeOffset}px)` : undefined,
+                  transition: swipeOffset === 0 ? 'transform 0.2s cubic-bezier(0.2, 0, 0, 1)' : undefined,
+                }}
+                className={`relative px-3.5 py-2.5 rounded-2xl text-xs shadow-sm max-w-[85%] sm:max-w-md cursor-pointer transition-all ${
+                  isReactionPickerOpen ? 'ring-2 ring-emerald-500/50' : ''
+                } ${
                   isSender
-                    ? 'bg-neutral-900 text-white dark:bg-white dark:text-neutral-900 rounded-br-xs'
-                    : 'bg-white dark:bg-[#18181b] text-neutral-900 dark:text-white rounded-bl-xs border border-neutral-200 dark:border-neutral-800'
+                    ? 'bg-[#27272a] text-white rounded-br-xs border border-neutral-700/60'
+                    : 'bg-[#18181b] text-white rounded-bl-xs border border-neutral-800'
                 }`}
               >
                 {/* Reply Citation */}
                 {replyParent && (
                   <div
-                    className={`mb-2 p-2 rounded-lg border-l-2 text-[11px] opacity-80 ${
+                    className={`mb-2 p-2 rounded-lg border-l-2 text-[11px] opacity-85 ${
                       isSender
-                        ? 'bg-white/10 border-white text-white dark:bg-black/10 dark:border-black dark:text-black'
-                        : 'bg-neutral-100 dark:bg-neutral-800 border-neutral-400 text-neutral-600 dark:text-neutral-300'
+                        ? 'bg-black/30 border-emerald-400 text-neutral-200'
+                        : 'bg-neutral-900 border-neutral-500 text-neutral-300'
                     }`}
                   >
-                    <p className="font-semibold text-[10px]">
+                    <p className="font-semibold text-[10px] text-emerald-400">
                       {replyParent.senderUid === user?.uid ? 'You' : otherUser.fullName}
                     </p>
                     <p className="truncate">
@@ -393,79 +666,120 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({ onBack }) => {
                   </div>
                 )}
 
-                {/* Attached Image */}
+                {/* Attached Image with Download Button */}
                 {m.content.imageBase64 && (
-                  <div className="mb-2 rounded-xl overflow-hidden cursor-pointer">
+                  <div className="relative mb-2 rounded-xl overflow-hidden group/img">
                     <img
                       src={m.content.imageBase64}
                       alt={m.content.fileName || 'Attachment'}
                       onClick={() => setSelectedImageFull(m.content.imageBase64!)}
-                      className="max-h-60 rounded-xl object-cover hover:opacity-95 transition-opacity"
+                      className="max-h-64 rounded-xl object-cover hover:opacity-95 transition-opacity cursor-pointer border border-neutral-700/50"
                     />
+                    <button
+                      type="button"
+                      onClick={(e) => handleDownloadImage(e, m.content.imageBase64!, m.content.fileName)}
+                      className="absolute bottom-2 right-2 px-2 py-1 bg-black/80 hover:bg-black text-white rounded-lg backdrop-blur-xs flex items-center space-x-1.5 text-[10px] shadow-md border border-white/10 transition-colors"
+                      title="Download image"
+                    >
+                      <Download className="w-3.5 h-3.5" />
+                      <span className="font-semibold text-[10px]">Save</span>
+                    </button>
                   </div>
                 )}
 
                 {/* Plaintext Content */}
                 {m.content.text && (
-                  <p className="whitespace-pre-wrap break-words leading-relaxed">
+                  <p className="whitespace-pre-wrap break-words leading-relaxed select-text">
                     {m.content.text}
                   </p>
                 )}
 
                 {/* Footer: Timestamp, Ephemeral, Status */}
                 <div
-                  className={`flex items-center justify-end space-x-1 mt-1 text-[9px] select-none ${
-                    isSender
-                      ? 'text-neutral-300 dark:text-neutral-600'
-                      : 'text-neutral-400 dark:text-neutral-500'
-                  }`}
+                  className={`flex items-center justify-end space-x-1 mt-1 text-[9px] select-none text-neutral-400`}
                 >
-                  {isStarred && <Star className="w-2.5 h-2.5 fill-current" />}
+                  {isStarred && <Star className="w-2.5 h-2.5 fill-current text-amber-400" />}
                   {m.ephemeralType !== 'off' && <Clock className="w-2.5 h-2.5" />}
                   <span>{formatMsgTime(m.timestamp)}</span>
                   {isSender && (
                     <span>
                       {m.status === 'delivered' || m.status === 'read' ? (
-                        <CheckCheck className="w-3 h-3" />
+                        <CheckCheck className="w-3 h-3 text-emerald-400" />
                       ) : (
-                        <Check className="w-3 h-3" />
+                        <Check className="w-3 h-3 text-neutral-400" />
                       )}
                     </span>
                   )}
                 </div>
               </div>
 
-              {/* Message Hover Actions */}
+              {/* Reaction Badges Display under bubble */}
+              {m.reactions && Object.keys(m.reactions).length > 0 && (
+                <div className="flex flex-wrap gap-1 px-1 z-10">
+                  {Object.entries(m.reactions).map(([emoji, uids]) => {
+                    const hasMyReaction = user && uids.includes(user.uid);
+                    return (
+                      <button
+                        key={emoji}
+                        onClick={() => addMessageReaction(m.id, emoji)}
+                        className={`inline-flex items-center space-x-1 px-2 py-0.5 rounded-full text-xs border transition-colors ${
+                          hasMyReaction
+                            ? 'bg-[#27272a] border-emerald-500/80 text-white font-bold'
+                            : 'bg-[#18181b] border-neutral-800 text-neutral-300 hover:border-neutral-700'
+                        }`}
+                        title={`${uids.length} reaction${uids.length > 1 ? 's' : ''}`}
+                      >
+                        <span>{emoji}</span>
+                        <span className="text-[10px] font-mono">{uids.length}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+
+              {/* Message Actions (Quick access buttons) */}
               <div
-                className={`opacity-0 group-hover:opacity-100 flex items-center space-x-1 px-1 transition-opacity text-neutral-400 text-[11px]`}
+                className={`flex items-center space-x-1 px-1 text-neutral-400 text-[11px] ${
+                  isReactionPickerOpen ? 'opacity-100' : 'opacity-70 sm:opacity-0 sm:group-hover:opacity-100'
+                } transition-opacity`}
               >
                 <button
-                  onClick={() => setReplyingTo(m)}
-                  className="p-1 hover:text-neutral-900 dark:hover:text-white"
-                  title="Reply"
+                  onClick={() => {
+                    setReactionPickerMsgId(reactionPickerMsgId === m.id ? null : m.id);
+                    setShowExtendedPicker(false);
+                  }}
+                  className="p-1 hover:text-white rounded hover:bg-neutral-800"
+                  title="React with Emoji"
                 >
-                  <CornerDownRight className="w-3 h-3" />
+                  <Smile className="w-3.5 h-3.5" />
+                </button>
+                <button
+                  onClick={() => setReplyingTo(m)}
+                  className="p-1 hover:text-white rounded hover:bg-neutral-800"
+                  title="Reply (Swipe right)"
+                >
+                  <CornerDownRight className="w-3.5 h-3.5" />
                 </button>
                 <button
                   onClick={() => handleCopyText(m.content.text)}
-                  className="p-1 hover:text-neutral-900 dark:hover:text-white"
-                  title="Copy"
+                  className="p-1 hover:text-white rounded hover:bg-neutral-800"
+                  title="Copy text"
                 >
-                  <Copy className="w-3 h-3" />
+                  <Copy className="w-3.5 h-3.5" />
                 </button>
                 <button
                   onClick={() => handleToggleStar(m.id)}
-                  className="p-1 hover:text-neutral-900 dark:hover:text-white"
+                  className="p-1 hover:text-white rounded hover:bg-neutral-800"
                   title="Star"
                 >
-                  <Star className="w-3 h-3" />
+                  <Star className="w-3.5 h-3.5" />
                 </button>
                 <button
                   onClick={() => deleteMessageLocally(m.id)}
-                  className="p-1 hover:text-rose-600"
+                  className="p-1 hover:text-rose-400 rounded hover:bg-neutral-800"
                   title="Delete locally"
                 >
-                  <Trash2 className="w-3 h-3" />
+                  <Trash2 className="w-3.5 h-3.5" />
                 </button>
               </div>
             </div>
@@ -600,16 +914,30 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({ onBack }) => {
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/95 backdrop-blur-md p-4"
           onClick={() => setSelectedImageFull(null)}
         >
-          <button
-            onClick={() => setSelectedImageFull(null)}
-            className="absolute top-6 right-6 p-2 text-white bg-neutral-800/80 rounded-full hover:bg-neutral-700"
+          <div
+            className="absolute top-6 right-6 flex items-center space-x-2 z-50"
+            onClick={(e) => e.stopPropagation()}
           >
-            <X className="w-5 h-5" />
-          </button>
+            <button
+              onClick={(e) => handleDownloadImage(e, selectedImageFull)}
+              className="px-3.5 py-2 text-white bg-neutral-800/90 hover:bg-neutral-700 rounded-xl border border-neutral-700 flex items-center space-x-1.5 text-xs font-semibold shadow-lg transition-colors"
+              title="Download image"
+            >
+              <Download className="w-4 h-4" />
+              <span>Download</span>
+            </button>
+            <button
+              onClick={() => setSelectedImageFull(null)}
+              className="p-2 text-white bg-neutral-800/90 hover:bg-neutral-700 rounded-xl border border-neutral-700 transition-colors"
+              title="Close"
+            >
+              <X className="w-5 h-5" />
+            </button>
+          </div>
           <img
             src={selectedImageFull}
             alt="Attachment"
-            className="max-w-full max-h-[85vh] rounded-2xl shadow-2xl object-contain"
+            className="max-w-full max-h-[85vh] rounded-2xl shadow-2xl object-contain border border-neutral-800"
           />
         </div>
       )}

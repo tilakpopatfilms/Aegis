@@ -219,24 +219,41 @@ export async function generateSafetyNumber(pubKeyA: string, pubKeyB: string): Pr
   return digits.trim();
 }
 
-// Client-side Encrypt Image File (returns Base64 AES-GCM encrypted data URI)
-export async function encryptImageFile(
-  file: File,
-  recipientPubKey: string,
-  senderPrivKey: string
-): Promise<string> {
+// Convert and compress client-side Image File to Base64 data URL
+export function compressImageFile(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
-    reader.onload = async () => {
-      try {
-        const base64Data = reader.result as string;
-        const encrypted = await encryptE2EEPayload(base64Data, recipientPubKey, senderPrivKey);
-        resolve(encrypted);
-      } catch (err) {
-        reject(err);
-      }
+    reader.onload = () => {
+      const img = new Image();
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        let width = img.width;
+        let height = img.height;
+        const maxDim = 1200;
+        if (width > maxDim || height > maxDim) {
+          if (width > height) {
+            height = Math.round((height * maxDim) / width);
+            width = maxDim;
+          } else {
+            width = Math.round((width * maxDim) / height);
+            height = maxDim;
+          }
+        }
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) {
+          resolve(reader.result as string);
+          return;
+        }
+        ctx.drawImage(img, 0, 0, width, height);
+        resolve(canvas.toDataURL('image/jpeg', 0.82));
+      };
+      img.onerror = () => resolve(reader.result as string);
+      img.src = reader.result as string;
     };
     reader.onerror = reject;
     reader.readAsDataURL(file);
   });
 }
+

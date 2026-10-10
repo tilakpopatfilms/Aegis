@@ -30,7 +30,7 @@ export const DirectChatInvitePage: React.FC<DirectChatInvitePageProps> = ({
   const [loginLoading, setLoginLoading] = useState(false);
   const [loginError, setLoginError] = useState<string | null>(null);
 
-  const cleanTarget = targetUsername.toLowerCase().replace(/\s+/g, '');
+  const cleanTarget = decodeURIComponent(targetUsername).replace(/^[@/]+/, '').toLowerCase().trim();
 
   useEffect(() => {
     const resolveUser = async () => {
@@ -130,11 +130,11 @@ export const DirectChatInvitePage: React.FC<DirectChatInvitePageProps> = ({
 
   if (loading) {
     return (
-      <div className="min-h-[100dvh] w-full bg-white dark:bg-[#09090b] flex flex-col items-center justify-center text-neutral-900 dark:text-white space-y-3">
-        <div className="w-10 h-10 rounded-full bg-neutral-900 dark:bg-white text-white dark:text-neutral-900 flex items-center justify-center animate-pulse">
+      <div className="h-[100dvh] w-full bg-[#09090b] flex flex-col items-center justify-center text-white space-y-3">
+        <div className="w-10 h-10 rounded-full bg-white text-neutral-900 flex items-center justify-center animate-pulse">
           <Shield className="w-5 h-5" />
         </div>
-        <p className="text-xs font-semibold tracking-wider text-neutral-500">
+        <p className="text-xs font-semibold tracking-wider text-neutral-400">
           Connecting to @{cleanTarget}...
         </p>
       </div>
@@ -143,33 +143,29 @@ export const DirectChatInvitePage: React.FC<DirectChatInvitePageProps> = ({
 
   if (notFound || !targetProfile) {
     return (
-      <div className="min-h-[100dvh] w-full bg-white dark:bg-[#09090b] text-neutral-900 dark:text-neutral-100 flex flex-col justify-between p-6">
-        <div className="w-full max-w-md mx-auto">
+      <div className="h-[100dvh] w-full bg-[#09090b] text-neutral-100 overflow-y-auto p-4 sm:p-8">
+        <div className="w-full max-w-md mx-auto mb-6">
           <button
-            onClick={() => onNavigate('/chat')}
-            className="flex items-center space-x-1.5 text-xs font-semibold text-neutral-500 hover:text-neutral-900 dark:hover:text-white transition-colors"
+            onClick={() => onNavigate('/home')}
+            className="flex items-center space-x-1.5 text-xs font-semibold text-neutral-400 hover:text-white transition-colors"
           >
             <ArrowLeft className="w-4 h-4" />
             <span>Back to Home</span>
           </button>
         </div>
 
-        <div className="w-full max-w-md mx-auto my-auto p-8 bg-neutral-50 dark:bg-[#121215] border border-neutral-200 dark:border-neutral-800 rounded-3xl text-center space-y-4">
+        <div className="w-full max-w-md mx-auto p-8 bg-[#121215] border border-neutral-800 rounded-3xl text-center space-y-4">
           <AlertCircle className="w-10 h-10 text-neutral-400 mx-auto" />
-          <h2 className="text-xl font-bold tracking-tight">Account Not Found</h2>
-          <p className="text-xs text-neutral-500">
-            The account <span className="font-mono font-bold text-neutral-900 dark:text-white">@{cleanTarget}</span> does not exist or may have been removed.
+          <h2 className="text-xl font-bold tracking-tight text-white">Account Not Found</h2>
+          <p className="text-xs text-neutral-400">
+            The account <span className="font-mono font-bold text-white">@{cleanTarget}</span> does not exist or may have been removed.
           </p>
           <button
-            onClick={() => onNavigate('/chat')}
-            className="w-full py-2.5 bg-neutral-900 dark:bg-white text-white dark:text-neutral-900 text-xs font-bold rounded-xl"
+            onClick={() => onNavigate('/home')}
+            className="w-full py-2.5 bg-white text-neutral-900 text-xs font-bold rounded-xl"
           >
             Go to Aegis Home
           </button>
-        </div>
-
-        <div className="text-center text-[11px] text-neutral-400">
-          Aegis Private Messaging
         </div>
       </div>
     );
@@ -177,28 +173,28 @@ export const DirectChatInvitePage: React.FC<DirectChatInvitePageProps> = ({
 
   // Unauthenticated visitor view: Direct Sign In page with recipient context
   return (
-    <div className="min-h-[100dvh] w-full bg-white dark:bg-[#09090b] text-neutral-900 dark:text-neutral-100 flex flex-col justify-between p-4 sm:p-8">
+    <div className="h-[100dvh] w-full bg-[#09090b] text-neutral-100 overflow-y-auto overflow-x-hidden p-4 sm:p-8">
       {/* Top Header */}
-      <div className="w-full max-w-md mx-auto flex items-center justify-between">
+      <div className="w-full max-w-md mx-auto flex items-center justify-between mb-6">
         <button
-          onClick={() => onNavigate('/chat')}
-          className="flex items-center space-x-1.5 text-xs font-semibold text-neutral-500 hover:text-neutral-900 dark:hover:text-white transition-colors"
+          onClick={() => onNavigate('/home')}
+          className="flex items-center space-x-1.5 text-xs font-semibold text-neutral-400 hover:text-white transition-colors"
         >
           <ArrowLeft className="w-4 h-4" />
-          <span>Home</span>
+          <span>Back to Home</span>
         </button>
 
         <div className="flex items-center space-x-1.5 select-none">
-          <div className="w-6 h-6 rounded-full bg-neutral-900 dark:bg-white text-white dark:text-neutral-900 flex items-center justify-center font-bold text-xs">
+          <div className="w-6 h-6 rounded-full bg-white text-neutral-900 flex items-center justify-center font-bold text-xs">
             <Shield className="w-3.5 h-3.5" />
           </div>
-          <span className="font-bold text-sm tracking-tight">Aegis</span>
+          <span className="font-bold text-sm tracking-tight text-white">Aegis</span>
         </div>
       </div>
 
       {/* Target Recipient Card & Sign In Form */}
-      <div className="w-full max-w-md mx-auto my-auto py-6">
-        <div className="bg-neutral-50 dark:bg-[#121215] border border-neutral-200 dark:border-neutral-800 rounded-3xl p-6 sm:p-8 space-y-5 shadow-xs">
+      <div className="w-full max-w-md mx-auto pb-20">
+        <div className="bg-[#121215] border border-neutral-800 rounded-3xl p-6 sm:p-8 space-y-5 shadow-xs">
           {/* Recipient Badge */}
           <div className="flex items-center space-x-3 pb-4 border-b border-neutral-200 dark:border-neutral-800">
             {hasPhoto ? (

@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect, ReactNode, useCallback } from 'react';
+import React, { createContext, useContext, useState, useEffect, ReactNode, useCallback, useRef } from 'react';
 import {
   collection,
   doc,
@@ -37,7 +37,7 @@ import {
 import {
   encryptE2EEPayload,
   decryptE2EEPayload,
-  encryptImageFile,
+  compressImageFile,
   getPublicKeyFromPrivateKey,
   generateIdentityKeyPair,
 } from '../crypto/crypto';
@@ -75,6 +75,11 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [selectedConversation, setSelectedConversation] = useState<Conversation | null>(null);
+  const selectedConversationRef = useRef<Conversation | null>(null);
+  useEffect(() => {
+    selectedConversationRef.current = selectedConversation;
+  }, [selectedConversation]);
+
   const [messages, setMessages] = useState<DecryptedMessage[]>([]);
   const [loadingConversations, setLoadingConversations] = useState<boolean>(true);
   const [loadingMessages, setLoadingMessages] = useState<boolean>(false);
@@ -108,9 +113,27 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
     // Always load local conversations first for instant offline review
     const loadLocal = async () => {
-      const localList = await getLocalConversations();
+      const localList = await getLocalConversations(user.uid);
       setConversations(localList);
       setLoadingConversations(false);
+
+      // Asynchronously ensure all conversations have peer profiles populated
+      const needsProfile = localList.filter((c) => !c.otherUser || !c.otherUser.fullName);
+      if (needsProfile.length > 0) {
+        for (const c of needsProfile) {
+          const otherUid = c.participants.find((p) => p !== user.uid);
+          if (otherUid) {
+            try {
+              const snap = await getDoc(doc(db, 'public_profiles', otherUid));
+              if (snap.exists()) {
+                c.otherUser = snap.data() as UserProfile;
+                await saveLocalConversation(c);
+              }
+            } catch (e) {}
+          }
+        }
+        setConversations([...localList]);
+      }
     };
 
     loadLocal();
@@ -153,7 +176,7 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         }
 
         // Merge with existing local conversations
-        const localList = await getLocalConversations();
+        const localList = await getLocalConversations(user.uid);
         const mergedMap = new Map<string, Conversation>();
 
         localList.forEach((c) => mergedMap.set(c.id, c));
@@ -169,7 +192,7 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         });
 
         const finalList = Array.from(mergedMap.values()).sort(
-          (a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
+          (a, b) => new Date(b.updatedAt || 0).getTime() - new Date(a.updatedAt || 0).getTime()
         );
 
         setConversations(finalList);
@@ -186,14 +209,14 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   useEffect(() => {
     const interval = setInterval(async () => {
       const purgedCount = await purgeExpiredLocalMessages();
-      if (purgedCount > 0 && selectedConversation) {
-        const updated = await getLocalMessages(selectedConversation.id);
+      if (purgedCount > 0 && selectedConversationRef.current) {
+        const updated = await getLocalMessages(selectedConversationRef.current.id);
         setMessages(updated);
       }
     }, 10000);
 
     return () => clearInterval(interval);
-  }, [selectedConversation]);
+  }, []);
 
   // 2. GLOBAL Real-time Inbound Message Listener (where recipientUid == current user)
   useEffect(() => {
@@ -224,6 +247,31 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
           const msgId = docSnap.id;
 
           try {
+            // Handle Message Reactions Relay
+            if (data.type === 'reaction') {
+              const targetMsgs = await getLocalMessages(data.conversationId);
+              const found = targetMsgs.find((m) => m.id === data.messageId);
+              if (found) {
+                const reactions: Record<string, string[]> = { ...(found.reactions || {}) };
+                const currentList = reactions[data.emoji] || [];
+                if (data.action === 'remove') {
+                  reactions[data.emoji] = currentList.filter((u) => u !== data.senderUid);
+                  if (reactions[data.emoji].length === 0) delete reactions[data.emoji];
+                } else {
+                  if (!currentList.includes(data.senderUid)) {
+                    reactions[data.emoji] = [...currentList, data.senderUid];
+                  }
+                }
+                const updatedFound = { ...found, reactions };
+                await saveLocalMessage(updatedFound);
+                if (selectedConversationRef.current && selectedConversationRef.current.id === data.conversationId) {
+                  setMessages((prev) => prev.map((m) => (m.id === data.messageId ? updatedFound : m)));
+                }
+              }
+              deleteDoc(doc(db, 'messages', msgId)).catch(() => {});
+              continue;
+            }
+
             // Retrieve sender public key: prefer direct payload, fallback to public_profiles
             let senderPublicKey = data.senderPublicKey;
             let senderProfile: UserProfile | undefined = undefined;
@@ -251,13 +299,32 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
               continue;
             }
 
-            // Decrypt E2EE Payload
+            // Decrypt E2EE Payload with multi-fallback resilience
             let content: PlaintextMessageContent = { text: '' };
+            let decryptedJson: string | null = null;
             try {
-              const decryptedJson = await decryptE2EEPayload(data.ciphertext, senderPublicKey, privKey);
-              content = JSON.parse(decryptedJson);
-            } catch (decErr) {
-              console.warn('Ciphertext decryption notice (re-trying or fallback):', decErr);
+              decryptedJson = await decryptE2EEPayload(data.ciphertext, senderPublicKey, privKey);
+            } catch (err1) {
+              console.warn('First decryption attempt notice, checking fresh sender public key:', err1);
+              try {
+                const freshSnap = await getDoc(doc(db, 'public_profiles', data.senderUid));
+                if (freshSnap.exists()) {
+                  const freshPub = freshSnap.data().publicKey;
+                  if (freshPub && freshPub !== senderPublicKey) {
+                    decryptedJson = await decryptE2EEPayload(data.ciphertext, freshPub, privKey);
+                    senderPublicKey = freshPub;
+                  }
+                }
+              } catch (err2) {}
+            }
+
+            if (decryptedJson) {
+              try {
+                content = JSON.parse(decryptedJson);
+              } catch (parseErr) {
+                content = { text: decryptedJson };
+              }
+            } else {
               content = { text: '[Encrypted message received]' };
             }
 
@@ -285,16 +352,28 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
             if (!isDeleted) {
               const previewText = content.text || (content.imageBase64 ? 'Photo' : 'New message');
 
+              // Ensure senderProfile has full name and username
+              let resolvedSenderProfile = senderProfile;
+              if (!resolvedSenderProfile || !resolvedSenderProfile.fullName) {
+                try {
+                  const sSnap = await getDoc(doc(db, 'public_profiles', data.senderUid));
+                  if (sSnap.exists()) {
+                    resolvedSenderProfile = sSnap.data() as UserProfile;
+                  }
+                } catch (e) {}
+              }
+
               setConversations((prev) => {
                 const existing = prev.find((c) => c.id === convId);
+                const isCurrentlySelected = selectedConversationRef.current?.id === convId;
                 if (existing) {
                   const updated: Conversation = {
                     ...existing,
-                    otherUser: existing.otherUser || senderProfile,
+                    otherUser: existing.otherUser || resolvedSenderProfile,
                     lastMessageText: previewText,
                     lastMessageTime: decryptedMsg.timestamp,
                     updatedAt: decryptedMsg.timestamp,
-                    unreadCount: selectedConversation?.id === convId ? 0 : (existing.unreadCount || 0) + 1,
+                    unreadCount: isCurrentlySelected ? 0 : (existing.unreadCount || 0) + 1,
                   };
                   saveLocalConversation(updated);
                   return [updated, ...prev.filter((c) => c.id !== convId)];
@@ -305,10 +384,10 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
                     ephemeralSetting: data.ephemeralType || 'off',
                     createdAt: decryptedMsg.timestamp,
                     updatedAt: decryptedMsg.timestamp,
-                    otherUser: senderProfile,
+                    otherUser: resolvedSenderProfile,
                     lastMessageText: previewText,
                     lastMessageTime: decryptedMsg.timestamp,
-                    unreadCount: selectedConversation?.id === convId ? 0 : 1,
+                    unreadCount: isCurrentlySelected ? 0 : 1,
                   };
                   saveLocalConversation(newConv);
                   return [newConv, ...prev];
@@ -316,7 +395,7 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
               });
             }
 
-            if (selectedConversation && selectedConversation.id === data.conversationId) {
+            if (selectedConversationRef.current && selectedConversationRef.current.id === data.conversationId) {
               hasNewMessagesForSelected = true;
             }
 
@@ -328,8 +407,8 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
           }
         }
 
-        if (hasNewMessagesForSelected && selectedConversation) {
-          const updated = await getLocalMessages(selectedConversation.id);
+        if (hasNewMessagesForSelected && selectedConversationRef.current) {
+          const updated = await getLocalMessages(selectedConversationRef.current.id);
           setMessages(updated);
         }
       },
@@ -339,7 +418,7 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     );
 
     return () => unsubscribe();
-  }, [user, selectedConversation, getLocalPrivateKey]);
+  }, [user, getLocalPrivateKey]);
 
   // Select Active Conversation
   const selectConversation = async (conv: Conversation | null) => {
@@ -458,16 +537,15 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     const recipientUid = selectedConversation.participants.find((p) => p !== user.uid);
     if (!recipientUid) return;
 
-    // 2. Resolve recipient public key
-    let recipientPubKey: string | undefined = selectedConversation.otherUser?.publicKey;
-    if (!recipientPubKey) {
-      try {
-        const recipientSnap = await getDoc(doc(db, 'public_profiles', recipientUid));
-        if (recipientSnap.exists()) {
-          recipientPubKey = recipientSnap.data().publicKey;
-        }
-      } catch (e) {}
-    }
+    // 2. Resolve recipient public key: always prefer fresh from public_profiles
+    let recipientPubKey: string | undefined = undefined;
+    try {
+      const recipientSnap = await getDoc(doc(db, 'public_profiles', recipientUid));
+      if (recipientSnap.exists()) {
+        recipientPubKey = recipientSnap.data().publicKey;
+      }
+    } catch (e) {}
+
     if (!recipientPubKey) {
       try {
         const prekeySnap = await getDoc(doc(db, 'prekeys', recipientUid));
@@ -476,14 +554,24 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         }
       } catch (e) {}
     }
+
+    if (!recipientPubKey) {
+      recipientPubKey = selectedConversation.otherUser?.publicKey;
+    }
+
     if (!recipientPubKey) {
       recipientPubKey = conversations.find((c) => c.participants.includes(recipientUid))?.otherUser?.publicKey;
     }
+
     if (!recipientPubKey) {
       throw new Error('Recipient identity key is not registered yet. Ask them to log in to activate messaging.');
     }
 
-    const senderPubKey = profile?.publicKey || getPublicKeyFromPrivateKey(privKey);
+    // Sender's public key MUST strictly be derived from the exact private key used to encrypt!
+    const senderPubKey = getPublicKeyFromPrivateKey(privKey);
+    if (profile && profile.publicKey !== senderPubKey) {
+      updateDoc(doc(db, 'public_profiles', user.uid), { publicKey: senderPubKey }).catch(() => {});
+    }
 
     const content: PlaintextMessageContent = {
       text,
@@ -586,15 +674,14 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     const recipientUid = selectedConversation.participants.find((p) => p !== user.uid);
     if (!recipientUid) return;
 
-    let recipientPubKey: string | undefined = selectedConversation.otherUser?.publicKey;
-    if (!recipientPubKey) {
-      try {
-        const recipientSnap = await getDoc(doc(db, 'public_profiles', recipientUid));
-        if (recipientSnap.exists()) {
-          recipientPubKey = recipientSnap.data().publicKey;
-        }
-      } catch (e) {}
-    }
+    let recipientPubKey: string | undefined = undefined;
+    try {
+      const recipientSnap = await getDoc(doc(db, 'public_profiles', recipientUid));
+      if (recipientSnap.exists()) {
+        recipientPubKey = recipientSnap.data().publicKey;
+      }
+    } catch (e) {}
+
     if (!recipientPubKey) {
       try {
         const prekeySnap = await getDoc(doc(db, 'prekeys', recipientUid));
@@ -603,15 +690,28 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         }
       } catch (e) {}
     }
+
+    if (!recipientPubKey) {
+      recipientPubKey = selectedConversation.otherUser?.publicKey;
+    }
+
+    if (!recipientPubKey) {
+      recipientPubKey = conversations.find((c) => c.participants.includes(recipientUid))?.otherUser?.publicKey;
+    }
+
     if (!recipientPubKey) {
       throw new Error('Recipient identity key not found.');
     }
 
-    const senderPubKey = profile?.publicKey || getPublicKeyFromPrivateKey(privKey);
+    const senderPubKey = getPublicKeyFromPrivateKey(privKey);
+    if (profile && profile.publicKey !== senderPubKey) {
+      updateDoc(doc(db, 'public_profiles', user.uid), { publicKey: senderPubKey }).catch(() => {});
+    }
 
-    const encryptedDataUri = await encryptImageFile(file, recipientPubKey, privKey);
+    const imageDataUrl = await compressImageFile(file);
     const content: PlaintextMessageContent = {
-      imageBase64: encryptedDataUri,
+      imageBase64: imageDataUrl,
+      fileName: file.name,
     };
 
     const ciphertext = await encryptE2EEPayload(JSON.stringify(content), recipientPubKey, privKey);
@@ -715,8 +815,10 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
     const currentReactions: Record<string, string[]> = { ...(msg.reactions || {}) };
     const userList = currentReactions[emoji] || [];
+    let isRemoving = false;
 
     if (userList.includes(user.uid)) {
+      isRemoving = true;
       currentReactions[emoji] = userList.filter((uid) => uid !== user.uid);
       if (currentReactions[emoji].length === 0) {
         delete currentReactions[emoji];
@@ -728,6 +830,22 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     const updatedMsg: DecryptedMessage = { ...msg, reactions: currentReactions };
     await saveLocalMessage(updatedMsg);
     setMessages((prev) => prev.map((m) => (m.id === messageId ? updatedMsg : m)));
+
+    // Relay reaction to peer contact in Firestore
+    const recipientUid = msg.senderUid === user.uid ? msg.recipientUid : msg.senderUid;
+    if (recipientUid) {
+      const reactId = `react_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+      setDoc(doc(db, 'messages', reactId), {
+        type: 'reaction',
+        action: isRemoving ? 'remove' : 'add',
+        conversationId: msg.conversationId,
+        messageId,
+        emoji,
+        senderUid: user.uid,
+        recipientUid,
+        createdAt: new Date().toISOString(),
+      }).catch(() => {});
+    }
   };
 
   // Delete Single Message Locally

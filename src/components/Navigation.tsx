@@ -8,7 +8,7 @@ interface NavigationProps {
 }
 
 export const Navigation: React.FC<NavigationProps> = ({ currentPath, onNavigate }) => {
-  const { conversations } = useChat();
+  const { conversations, selectConversation } = useChat();
 
   const totalUnread = conversations.reduce((acc, c) => acc + (c.unreadCount || 0), 0);
 
@@ -20,7 +20,10 @@ export const Navigation: React.FC<NavigationProps> = ({ currentPath, onNavigate 
     <nav className="sm:hidden fixed bottom-0 left-0 right-0 z-40 bg-white dark:bg-[#0c0c0e] border-t border-neutral-200 dark:border-neutral-800 py-1.5 px-4 shadow-md">
       <div className="flex items-center justify-around max-w-sm mx-auto">
         <button
-          onClick={() => onNavigate('/chat')}
+          onClick={() => {
+            selectConversation(null);
+            onNavigate('/chat');
+          }}
           className={`flex flex-col items-center py-1 px-4 rounded-xl transition-colors ${
             isChatActive
               ? 'text-neutral-900 dark:text-white font-bold'

@@ -96,12 +96,16 @@ export async function saveLocalConversation(conv: Conversation): Promise<void> {
   await db.put('conversations', conv);
 }
 
-export async function getLocalConversations(): Promise<Conversation[]> {
+export async function getLocalConversations(userUid?: string): Promise<Conversation[]> {
   const db = await getLocalDB();
   const list = await db.getAll('conversations');
   const deletedSet = await getDeletedConversationIds();
-  const filtered = list.filter((c) => !deletedSet.has(c.id));
-  return filtered.sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
+  const filtered = list.filter((c) => {
+    if (deletedSet.has(c.id)) return false;
+    if (userUid && c.participants && !c.participants.includes(userUid)) return false;
+    return true;
+  });
+  return filtered.sort((a, b) => new Date(b.updatedAt || 0).getTime() - new Date(a.updatedAt || 0).getTime());
 }
 
 export async function getLocalConversation(id: string): Promise<Conversation | undefined> {

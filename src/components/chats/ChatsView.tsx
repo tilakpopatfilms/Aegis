@@ -33,11 +33,12 @@ export const ChatsView: React.FC<ChatsViewProps> = ({ onOpenSearch }) => {
   const [filterMode, setFilterMode] = useState<'all' | 'unread'>('all');
   const [activeMenuConvId, setActiveMenuConvId] = useState<string | null>(null);
 
+  const cleanQ = searchQuery.trim().toLowerCase();
   const filtered = conversations.filter((c) => {
-    const nameMatch = c.otherUser?.fullName.toLowerCase().includes(searchQuery.toLowerCase());
-    const usernameMatch = c.otherUser?.username.toLowerCase().includes(searchQuery.toLowerCase());
-    const textMatch = c.lastMessageText?.toLowerCase().includes(searchQuery.toLowerCase());
-    const matchesSearch = nameMatch || usernameMatch || textMatch;
+    const nameMatch = c.otherUser?.fullName ? c.otherUser.fullName.toLowerCase().includes(cleanQ) : false;
+    const usernameMatch = c.otherUser?.username ? c.otherUser.username.toLowerCase().includes(cleanQ) : false;
+    const textMatch = c.lastMessageText ? c.lastMessageText.toLowerCase().includes(cleanQ) : false;
+    const matchesSearch = cleanQ === '' || nameMatch || usernameMatch || textMatch;
 
     if (filterMode === 'unread') {
       return matchesSearch && (c.unreadCount || 0) > 0;
@@ -45,8 +46,14 @@ export const ChatsView: React.FC<ChatsViewProps> = ({ onOpenSearch }) => {
     return matchesSearch;
   });
 
-  const pinned = filtered.filter((c) => c.isPinned);
-  const unpinned = filtered.filter((c) => !c.isPinned);
+  const sorted = [...filtered].sort((a, b) => {
+    const timeA = new Date(a.lastMessageTime || a.updatedAt || 0).getTime();
+    const timeB = new Date(b.lastMessageTime || b.updatedAt || 0).getTime();
+    return timeB - timeA;
+  });
+
+  const pinned = sorted.filter((c) => c.isPinned);
+  const unpinned = sorted.filter((c) => !c.isPinned);
 
   const formatTime = (iso?: string) => {
     if (!iso) return '';
@@ -93,7 +100,7 @@ export const ChatsView: React.FC<ChatsViewProps> = ({ onOpenSearch }) => {
             : 'hover:bg-neutral-50 dark:hover:bg-[#141417]'
         }`}
       >
-        {/* Contact Avatar */}
+        {/* Contact Avatar with WhatsApp-style Unread Counter Upper Corner */}
         <div className="relative shrink-0">
           {hasCustomPhoto ? (
             <img
@@ -106,6 +113,16 @@ export const ChatsView: React.FC<ChatsViewProps> = ({ onOpenSearch }) => {
               {getInitials(name)}
             </div>
           )}
+
+          {/* Unread Counter Badge Upper Profile Picture */}
+          {c.unreadCount && c.unreadCount > 0 ? (
+            <span
+              className="absolute -top-1 -right-1 min-w-5 h-5 px-1 bg-emerald-500 text-white rounded-full text-[10px] font-extrabold flex items-center justify-center border-2 border-white dark:border-[#0c0c0e] shadow-sm animate-pulse z-10"
+              title={`${c.unreadCount} unread`}
+            >
+              {c.unreadCount > 99 ? '99+' : c.unreadCount}
+            </span>
+          ) : null}
 
           {c.ephemeralSetting && c.ephemeralSetting !== 'off' && (
             <span
@@ -134,28 +151,31 @@ export const ChatsView: React.FC<ChatsViewProps> = ({ onOpenSearch }) => {
             </p>
 
             <div className="flex items-center space-x-1.5 shrink-0">
-              {c.isMuted && <VolumeX className="w-3 h-3 text-neutral-400" />}
-              {c.isPinned && <Pin className="w-3 h-3 text-neutral-400 fill-current" />}
-              {c.unreadCount && c.unreadCount > 0 ? (
-                <span className="px-1.5 py-0.2 bg-neutral-900 dark:bg-white text-white dark:text-neutral-900 rounded-full text-[10px] font-bold">
-                  {c.unreadCount}
+              {c.isMuted && (
+                <span title="Muted">
+                  <VolumeX className="w-3.5 h-3.5 text-neutral-400" />
                 </span>
-              ) : null}
+              )}
+              {c.isPinned && (
+                <span title="Pinned">
+                  <Pin className="w-3.5 h-3.5 text-amber-500 fill-current" />
+                </span>
+              )}
             </div>
           </div>
         </div>
 
-        {/* Conversation Action Menu Toggle */}
-        <div className="relative">
+        {/* Conversation Action Menu Toggle (Visible on hover and mobile touch) */}
+        <div className="relative shrink-0">
           <button
             onClick={(e) => {
               e.stopPropagation();
               setActiveMenuConvId(activeMenuConvId === c.id ? null : c.id);
             }}
-            className="p-1 text-neutral-400 hover:text-neutral-900 dark:hover:text-white opacity-0 group-hover:opacity-100 transition-opacity rounded"
-            title="Conversation Options"
+            className="p-1.5 text-neutral-400 hover:text-neutral-900 dark:hover:text-white hover:bg-neutral-200 dark:hover:bg-neutral-800 rounded-lg transition-colors"
+            title="Chat Settings & Options"
           >
-            <MoreVertical className="w-3.5 h-3.5" />
+            <MoreVertical className="w-4 h-4" />
           </button>
 
           {activeMenuConvId === c.id && (

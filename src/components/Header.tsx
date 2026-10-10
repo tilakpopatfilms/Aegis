@@ -1,7 +1,6 @@
 import React from 'react';
 import { Shield, Lock, MessageSquare, Search, User, LogOut } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
-import { ThemeToggle } from './common/ThemeToggle';
 import { PWAInstallButton } from './pwa/PWAInstallButton';
 
 interface HeaderProps {
@@ -26,12 +25,12 @@ export const Header: React.FC<HeaderProps> = ({ currentPath, onNavigate }) => {
   const isProfileActive = currentPath === '/profile';
 
   return (
-    <header className="sticky top-0 z-40 bg-white dark:bg-[#0c0c0e] text-neutral-900 dark:text-neutral-100 border-b border-neutral-200 dark:border-neutral-800 px-4 py-2.5 transition-colors shrink-0">
+    <header className="sticky top-0 z-40 bg-[#0c0c0e] text-white border-b border-neutral-800 px-4 py-2.5 transition-colors shrink-0">
       <div className="max-w-6xl mx-auto flex items-center justify-between">
         {/* Brand identity */}
         <div
           className="flex items-center space-x-3 cursor-pointer select-none"
-          onClick={() => onNavigate('/chat')}
+          onClick={() => onNavigate(user ? '/chat' : '/home')}
         >
           <div className="w-8 h-8 rounded-full bg-neutral-900 dark:bg-white text-white dark:text-neutral-900 flex items-center justify-center font-bold">
             <Shield className="w-4 h-4" />
@@ -93,8 +92,6 @@ export const Header: React.FC<HeaderProps> = ({ currentPath, onNavigate }) => {
         <div className="flex items-center space-x-2">
           {/* In-App PWA Install Button */}
           <PWAInstallButton />
-
-          <ThemeToggle />
 
           {user && profile ? (
             <div className="flex items-center space-x-2 pl-2 border-l border-neutral-200 dark:border-neutral-800">

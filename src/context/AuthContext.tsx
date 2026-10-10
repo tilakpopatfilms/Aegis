@@ -181,10 +181,10 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
             const profileDoc = await getDoc(doc(db, 'public_profiles', storedUid));
             if (profileDoc.exists()) {
               const loadedProfile = profileDoc.data() as UserProfile;
-              // If profile is missing public key, derive and patch it
-              if (!loadedProfile.publicKey && restoredPrivKey) {
+              // Ensure public key in profile matches derived public key of local private key
+              if (restoredPrivKey) {
                 const derivedPub = getPublicKeyFromPrivateKey(restoredPrivKey);
-                if (derivedPub) {
+                if (derivedPub && loadedProfile.publicKey !== derivedPub) {
                   loadedProfile.publicKey = derivedPub;
                   updateDoc(doc(db, 'public_profiles', storedUid), { publicKey: derivedPub }).catch(() => {});
                   setDoc(doc(db, 'prekeys', storedUid), { signedPrekey: derivedPub, updatedAt: new Date().toISOString() }, { merge: true }).catch(() => {});
@@ -461,18 +461,16 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       } catch (e) {}
       await saveKeyStoreItem('plainPrivateKey', recoveredPrivateKey);
 
-      // Ensure profile has matching public key if it was empty
-      if (!userProfile.publicKey) {
-        const derivedPub = getPublicKeyFromPrivateKey(recoveredPrivateKey);
-        if (derivedPub) {
-          userProfile.publicKey = derivedPub;
-          updateDoc(doc(db, 'public_profiles', resolvedUid), { publicKey: derivedPub }).catch(() => {});
-          setDoc(
-            doc(db, 'prekeys', resolvedUid),
-            { signedPrekey: derivedPub, updatedAt: new Date().toISOString() },
-            { merge: true }
-          ).catch(() => {});
-        }
+      // Ensure profile has matching public key with recovered private key
+      const derivedPub = getPublicKeyFromPrivateKey(recoveredPrivateKey);
+      if (derivedPub && userProfile.publicKey !== derivedPub) {
+        userProfile.publicKey = derivedPub;
+        updateDoc(doc(db, 'public_profiles', resolvedUid), { publicKey: derivedPub }).catch(() => {});
+        setDoc(
+          doc(db, 'prekeys', resolvedUid),
+          { signedPrekey: derivedPub, updatedAt: new Date().toISOString() },
+          { merge: true }
+        ).catch(() => {});
       }
     } else {
       // If no encrypted blob stored yet, check local storage or IndexedDB

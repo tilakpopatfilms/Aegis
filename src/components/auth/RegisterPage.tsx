@@ -116,28 +116,28 @@ export const RegisterPage: React.FC<RegisterPageProps> = ({ onNavigate }) => {
     : 'U';
 
   return (
-    <div className="min-h-screen w-full bg-white dark:bg-[#09090b] text-neutral-900 dark:text-neutral-100 flex flex-col p-4 sm:p-8 overflow-y-auto">
+    <div className="min-h-[100dvh] w-full bg-[#09090b] text-neutral-100 overflow-y-auto overflow-x-hidden p-4 sm:p-8 flex flex-col items-center justify-start">
       {/* Top Bar */}
-      <div className="w-full max-w-md mx-auto flex items-center justify-between shrink-0">
+      <div className="w-full max-w-md mx-auto flex items-center justify-between shrink-0 mb-6">
         <button
-          onClick={() => onNavigate('/chat')}
-          className="flex items-center space-x-1.5 text-xs font-semibold text-neutral-500 hover:text-neutral-900 dark:hover:text-white transition-colors"
+          onClick={() => onNavigate('/home')}
+          className="flex items-center space-x-1.5 text-xs font-semibold text-neutral-400 hover:text-white transition-colors"
         >
           <ArrowLeft className="w-4 h-4" />
-          <span>Back to App</span>
+          <span>Back to Home</span>
         </button>
 
         <div className="flex items-center space-x-1.5 select-none">
-          <div className="w-6 h-6 rounded-full bg-neutral-900 dark:bg-white text-white dark:text-neutral-900 flex items-center justify-center font-bold text-xs">
+          <div className="w-6 h-6 rounded-full bg-white text-neutral-900 flex items-center justify-center font-bold text-xs">
             <Shield className="w-3.5 h-3.5" />
           </div>
-          <span className="font-bold text-sm tracking-tight">Aegis</span>
+          <span className="font-bold text-sm tracking-tight text-white">Aegis</span>
         </div>
       </div>
 
       {/* Main Container */}
-      <div className="w-full max-w-md mx-auto my-auto py-6 shrink-0">
-        <div className="bg-neutral-50 dark:bg-[#121215] border border-neutral-200 dark:border-neutral-800 rounded-3xl p-6 sm:p-8 space-y-6 shadow-xs">
+      <div className="w-full max-w-md mx-auto pb-20">
+        <div className="bg-[#121215] border border-neutral-800 rounded-3xl p-6 sm:p-8 space-y-6 shadow-xs">
           {!generatedSecurityKey ? (
             /* Registration Form */
             <>

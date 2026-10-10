@@ -18,11 +18,20 @@ const MainApp: React.FC = () => {
   const { user, profile, loading } = useAuth();
   const { selectedConversation, selectConversation } = useChat();
 
-  const [currentPath, setCurrentPath] = useState<string>(() => window.location.pathname || '/chat');
+  const [currentPath, setCurrentPath] = useState<string>(() => {
+    const path = window.location.pathname;
+    if (path === '/' || path === '') {
+      return localStorage.getItem('aegis_session_uid') ? '/chat' : '/home';
+    }
+    return path;
+  });
   const [isQROpen, setIsQROpen] = useState(false);
 
   // Browser Navigation & History API sync
   const navigate = (newPath: string) => {
+    if (newPath === '/chat' && currentPath === '/chat') {
+      selectConversation(null as any);
+    }
     if (window.location.pathname !== newPath) {
       window.history.pushState(null, '', newPath);
     }
@@ -31,42 +40,64 @@ const MainApp: React.FC = () => {
 
   useEffect(() => {
     const handlePopState = () => {
-      setCurrentPath(window.location.pathname || '/chat');
+      const p = window.location.pathname;
+      setCurrentPath(p === '/' || p === '' ? (localStorage.getItem('aegis_session_uid') ? '/chat' : '/home') : p);
     };
 
     window.addEventListener('popstate', handlePopState);
     return () => window.removeEventListener('popstate', handlePopState);
   }, []);
 
+  // Redirect unauthenticated user trying to access /chat, and prevent authenticated user accessing /login or /register
+  useEffect(() => {
+    if (!loading && !user && (currentPath === '/chat' || currentPath === '/')) {
+      navigate('/home');
+    }
+    if (!loading && user && (currentPath === '/login' || currentPath === '/register')) {
+      navigate('/chat');
+    }
+  }, [loading, user, currentPath]);
+
   if (loading) {
     return (
-      <div className="h-[100dvh] w-full bg-white dark:bg-[#09090b] flex flex-col items-center justify-center text-neutral-900 dark:text-white space-y-3">
-        <div className="w-10 h-10 rounded-full bg-neutral-900 dark:bg-white text-white dark:text-neutral-900 flex items-center justify-center animate-pulse">
+      <div className="h-[100dvh] w-full bg-[#09090b] flex flex-col items-center justify-center text-white space-y-3">
+        <div className="w-10 h-10 rounded-full bg-white text-neutral-900 flex items-center justify-center animate-pulse">
           <Shield className="w-5 h-5" />
         </div>
-        <p className="text-xs font-semibold tracking-wider text-neutral-500">
+        <p className="text-xs font-semibold tracking-wider text-neutral-400">
           Loading Aegis...
         </p>
       </div>
     );
   }
 
-  // Route 1: Dedicated Full Page Sign In
+  // Route 1: Dedicated Full Page Sign In (Inaccessible when user is already signed in)
   if (currentPath === '/login') {
+    if (user) {
+      navigate('/chat');
+      return null;
+    }
     return <LoginPage onNavigate={navigate} />;
   }
 
-  // Route 2: Dedicated Full Page Sign Up
+  // Route 2: Dedicated Full Page Sign Up (Inaccessible when user is already signed in)
   if (currentPath === '/register') {
+    if (user) {
+      navigate('/chat');
+      return null;
+    }
     return <RegisterPage onNavigate={navigate} />;
   }
 
-  // Route 3: Direct User Link `/:username`
+  // Route 3: Direct User Link `/:username` or `/@:username`
   const isDirectUserRoute =
     currentPath !== '/' &&
+    currentPath !== '/home' &&
     currentPath !== '/chat' &&
     currentPath !== '/search' &&
     currentPath !== '/profile' &&
+    currentPath !== '/login' &&
+    currentPath !== '/register' &&
     currentPath.startsWith('/');
 
   if (isDirectUserRoute) {
@@ -80,7 +111,7 @@ const MainApp: React.FC = () => {
   }
 
   return (
-    <div className="h-[100dvh] w-full flex flex-col bg-white dark:bg-[#09090b] text-neutral-900 dark:text-neutral-100 overflow-hidden select-none transition-colors">
+    <div className="h-[100dvh] w-full flex flex-col bg-[#09090b] text-neutral-100 overflow-hidden select-none">
       {/* Top Header */}
       <Header
         currentPath={currentPath}
@@ -88,43 +119,43 @@ const MainApp: React.FC = () => {
       />
 
       {/* Main Workspace */}
-      {!user ? (
-        /* Welcome Landing for Unauthenticated Users */
-        <main className="flex-1 overflow-y-auto max-w-4xl mx-auto w-full flex flex-col items-center justify-center p-6 text-center space-y-8 my-auto">
+      {!user || currentPath === '/home' ? (
+        /* Welcome Landing for Users at /home or unauthenticated / */
+        <main className="flex-1 overflow-y-auto max-w-4xl mx-auto w-full flex flex-col items-center justify-start py-8 sm:py-16 px-4 sm:px-6 text-center space-y-8">
           <div className="space-y-3">
-            <div className="w-16 h-16 rounded-full bg-neutral-900 dark:bg-white text-white dark:text-neutral-900 flex items-center justify-center mx-auto shadow-sm">
+            <div className="w-16 h-16 rounded-full bg-white text-neutral-900 flex items-center justify-center mx-auto shadow-sm">
               <Shield className="w-8 h-8" />
             </div>
-            <h1 className="text-3xl md:text-5xl font-extrabold tracking-tight text-neutral-900 dark:text-white">
+            <h1 className="text-3xl md:text-5xl font-extrabold tracking-tight text-white">
               Aegis Private Messaging
             </h1>
-            <p className="text-sm text-neutral-500 dark:text-neutral-400 max-w-lg mx-auto leading-relaxed">
-              Genuine end-to-end encrypted messaging with local storage, disappearing messages, and zero plaintext on cloud servers.
+            <p className="text-sm text-neutral-400 max-w-lg mx-auto leading-relaxed">
+              Genuine end-to-end encrypted messaging with offline local storage, disappearing messages, and zero plaintext on cloud servers.
             </p>
           </div>
 
           {/* Architecture Highlights */}
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 w-full max-w-2xl text-left">
-            <div className="p-4 bg-neutral-50 dark:bg-[#121215] rounded-2xl border border-neutral-200 dark:border-neutral-800 space-y-1.5 shadow-2xs">
-              <Lock className="w-5 h-5 text-neutral-800 dark:text-neutral-200" />
-              <h3 className="font-bold text-xs">End-to-End Encrypted</h3>
-              <p className="text-[11px] text-neutral-500">
+            <div className="p-4 bg-[#121215] rounded-2xl border border-neutral-800 space-y-1.5 shadow-2xs">
+              <Lock className="w-5 h-5 text-neutral-200" />
+              <h3 className="font-bold text-xs text-white">End-to-End Encrypted</h3>
+              <p className="text-[11px] text-neutral-400">
                 Curve25519 DH + AES-256-GCM payload encryption before network transmission.
               </p>
             </div>
 
-            <div className="p-4 bg-neutral-50 dark:bg-[#121215] rounded-2xl border border-neutral-200 dark:border-neutral-800 space-y-1.5 shadow-2xs">
-              <Key className="w-5 h-5 text-neutral-800 dark:text-neutral-200" />
-              <h3 className="font-bold text-xs">Permanent Security Key</h3>
-              <p className="text-[11px] text-neutral-500">
+            <div className="p-4 bg-[#121215] rounded-2xl border border-neutral-800 space-y-1.5 shadow-2xs">
+              <Key className="w-5 h-5 text-neutral-200" />
+              <h3 className="font-bold text-xs text-white">Permanent Security Key</h3>
+              <p className="text-[11px] text-neutral-400">
                 128-bit client recovery entropy formatted as ABCD-EFGH-IJKL.
               </p>
             </div>
 
-            <div className="p-4 bg-neutral-50 dark:bg-[#121215] rounded-2xl border border-neutral-200 dark:border-neutral-800 space-y-1.5 shadow-2xs">
-              <Shield className="w-5 h-5 text-neutral-800 dark:text-neutral-200" />
-              <h3 className="font-bold text-xs">Offline Local Storage</h3>
-              <p className="text-[11px] text-neutral-500">
+            <div className="p-4 bg-[#121215] rounded-2xl border border-neutral-800 space-y-1.5 shadow-2xs">
+              <Shield className="w-5 h-5 text-neutral-200" />
+              <h3 className="font-bold text-xs text-white">Offline Local Storage</h3>
+              <p className="text-[11px] text-neutral-400">
                 Messages cached in device memory so you can review chats even when disconnected.
               </p>
             </div>
@@ -132,18 +163,29 @@ const MainApp: React.FC = () => {
 
           {/* Actions */}
           <div className="flex flex-col sm:flex-row gap-3 w-full max-w-xs">
-            <button
-              onClick={() => navigate('/register')}
-              className="flex-1 py-3 px-5 bg-neutral-900 hover:bg-neutral-800 dark:bg-white dark:hover:bg-neutral-200 text-white dark:text-neutral-900 font-bold rounded-xl shadow-sm transition-all text-xs"
-            >
-              Create Account
-            </button>
-            <button
-              onClick={() => navigate('/login')}
-              className="flex-1 py-3 px-5 bg-white dark:bg-[#18181b] hover:bg-neutral-100 dark:hover:bg-[#202024] text-neutral-900 dark:text-white font-bold rounded-xl border border-neutral-200 dark:border-neutral-800 transition-all text-xs"
-            >
-              Sign In
-            </button>
+            {user ? (
+              <button
+                onClick={() => navigate('/chat')}
+                className="flex-1 py-3 px-5 bg-white hover:bg-neutral-200 text-neutral-900 font-bold rounded-xl shadow-sm transition-all text-xs"
+              >
+                Go to Chats
+              </button>
+            ) : (
+              <>
+                <button
+                  onClick={() => navigate('/register')}
+                  className="flex-1 py-3 px-5 bg-white hover:bg-neutral-200 text-neutral-900 font-bold rounded-xl shadow-sm transition-all text-xs"
+                >
+                  Create Account
+                </button>
+                <button
+                  onClick={() => navigate('/login')}
+                  className="flex-1 py-3 px-5 bg-[#18181b] hover:bg-[#202024] text-white font-bold rounded-xl border border-neutral-800 transition-all text-xs"
+                >
+                  Sign In
+                </button>
+              </>
+            )}
           </div>
         </main>
       ) : (
