@@ -23,25 +23,31 @@ const MainApp: React.FC = () => {
     if (path === '/' || path === '') {
       return localStorage.getItem('aegis_session_uid') ? '/chat' : '/home';
     }
+    if (path === '/chats') return '/chat';
     return path;
   });
   const [isQROpen, setIsQROpen] = useState(false);
 
   // Browser Navigation & History API sync
   const navigate = (newPath: string) => {
-    if (newPath === '/chat' && currentPath === '/chat') {
+    const normalized = newPath === '/chats' ? '/chat' : newPath;
+    if (normalized === '/chat' && (currentPath === '/chat' || currentPath === '/chats')) {
       selectConversation(null as any);
     }
-    if (window.location.pathname !== newPath) {
-      window.history.pushState(null, '', newPath);
+    if (window.location.pathname !== normalized) {
+      window.history.pushState(null, '', normalized);
     }
-    setCurrentPath(newPath);
+    setCurrentPath(normalized);
   };
 
   useEffect(() => {
     const handlePopState = () => {
       const p = window.location.pathname;
-      setCurrentPath(p === '/' || p === '' ? (localStorage.getItem('aegis_session_uid') ? '/chat' : '/home') : p);
+      if (p === '/chats') {
+        setCurrentPath('/chat');
+      } else {
+        setCurrentPath(p === '/' || p === '' ? (localStorage.getItem('aegis_session_uid') ? '/chat' : '/home') : p);
+      }
     };
 
     window.addEventListener('popstate', handlePopState);
@@ -50,7 +56,7 @@ const MainApp: React.FC = () => {
 
   // Redirect unauthenticated user trying to access /chat, and prevent authenticated user accessing /login or /register
   useEffect(() => {
-    if (!loading && !user && (currentPath === '/chat' || currentPath === '/')) {
+    if (!loading && !user && (currentPath === '/chat' || currentPath === '/chats' || currentPath === '/')) {
       navigate('/home');
     }
     if (!loading && user && (currentPath === '/login' || currentPath === '/register')) {
@@ -94,6 +100,7 @@ const MainApp: React.FC = () => {
     currentPath !== '/' &&
     currentPath !== '/home' &&
     currentPath !== '/chat' &&
+    currentPath !== '/chats' &&
     currentPath !== '/search' &&
     currentPath !== '/profile' &&
     currentPath !== '/login' &&
@@ -195,7 +202,7 @@ const MainApp: React.FC = () => {
             selectedConversation ? 'pb-0' : 'pb-14'
           } sm:pb-0 sm:my-2 rounded-none sm:rounded-2xl border-0 sm:border border-neutral-200 dark:border-neutral-800`}
         >
-          {(currentPath === '/chat' || currentPath === '/') && (
+          {(currentPath === '/chat' || currentPath === '/chats' || currentPath === '/') && (
             <div className="flex-1 flex w-full h-full overflow-hidden">
               {/* Left Sidebar: Conversations List */}
               <div

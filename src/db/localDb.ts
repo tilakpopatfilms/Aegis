@@ -89,10 +89,12 @@ export async function deleteLocalMessage(messageId: string): Promise<void> {
 }
 
 // Local Conversations API
-export async function saveLocalConversation(conv: Conversation): Promise<void> {
+export async function saveLocalConversation(conv: Conversation, force: boolean = false): Promise<void> {
+  if (!force) {
+    const isDeleted = await isConversationDeleted(conv.id);
+    if (isDeleted) return; // Do not save if previously deleted
+  }
   const db = await getLocalDB();
-  const isDeleted = await isConversationDeleted(conv.id);
-  if (isDeleted) return; // Do not save if previously deleted
   await db.put('conversations', conv);
 }
 
@@ -128,6 +130,18 @@ export async function markConversationAsDeleted(id: string): Promise<void> {
       localStorage.setItem('aegis_deleted_convs', JSON.stringify(arr));
     }
   } catch (e) {}
+}
+
+export async function unmarkConversationAsDeleted(id: string): Promise<void> {
+  try {
+    const raw = localStorage.getItem('aegis_deleted_convs') || '[]';
+    const arr: string[] = JSON.parse(raw);
+    const filtered = arr.filter((x) => x !== id);
+    localStorage.setItem('aegis_deleted_convs', JSON.stringify(filtered));
+  } catch (e) {}
+
+  const db = await getLocalDB();
+  await db.delete('deletedConversations', id);
 }
 
 export async function isConversationDeleted(id: string): Promise<boolean> {

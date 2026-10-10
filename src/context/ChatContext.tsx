@@ -31,6 +31,8 @@ import {
   purgeExpiredLocalMessages,
   isConversationDeleted,
   markConversationAsDeleted,
+  unmarkConversationAsDeleted,
+  getLocalConversation,
   getKeyStoreItem,
   saveKeyStoreItem,
 } from '../db/localDb';
@@ -59,13 +61,16 @@ interface ChatContextType {
   startOrGetConversation: (otherUserUid: string) => Promise<Conversation>;
   sendTextMessage: (text: string, replyToId?: string) => Promise<void>;
   sendImageMessage: (file: File) => Promise<void>;
+  sendVoiceMessage: (audioBlob: Blob, durationSeconds: number) => Promise<void>;
   updateEphemeralSetting: (setting: EphemeralSetting) => Promise<void>;
   addMessageReaction: (messageId: string, emoji: string) => Promise<void>;
   deleteMessageLocally: (messageId: string) => Promise<void>;
   deleteConversationLocally: (conversationId: string) => Promise<void>;
-  togglePinConversation: (conversationId: string) => Promise<void>;
+  togglePinConversation: (conversationId: string) => Promise<boolean>;
   toggleMuteConversation: (conversationId: string) => Promise<void>;
   pinnedConversations: Conversation[];
+  pinLimitNotice: string | null;
+  clearPinNotice: () => void;
 }
 
 const ChatContext = createContext<ChatContextType | undefined>(undefined);
@@ -161,13 +166,40 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
           // Resolve peer contact profile
           const otherUid = data.participants.find((p) => p !== user.uid);
           if (otherUid) {
-            try {
-              const otherSnap = await getDoc(doc(db, 'public_profiles', otherUid));
-              if (otherSnap.exists()) {
-                data.otherUser = otherSnap.data() as UserProfile;
+            if (data.participantDetails && data.participantDetails[otherUid]) {
+              const details = data.participantDetails[otherUid];
+              data.otherUser = {
+                uid: otherUid,
+                username: details.username || 'contact',
+                fullName: details.fullName || details.username || 'Contact',
+                photoURL: details.photoURL,
+                accountType: 'public',
+                publicKey: details.publicKey || '',
+                createdAt: data.createdAt || new Date().toISOString(),
+              };
+            }
+
+            if (!data.otherUser || !data.otherUser.fullName) {
+              try {
+                const otherSnap = await getDoc(doc(db, 'public_profiles', otherUid));
+                if (otherSnap.exists()) {
+                  data.otherUser = otherSnap.data() as UserProfile;
+                }
+              } catch (err) {
+                console.warn('Notice loading contact profile:', err);
               }
-            } catch (err) {
-              console.warn('Notice loading contact profile:', err);
+            }
+
+            if (!data.otherUser) {
+              const usernameFromUid = otherUid.startsWith('usr_') ? otherUid.split('_')[1] : 'contact';
+              data.otherUser = {
+                uid: otherUid,
+                username: usernameFromUid,
+                fullName: usernameFromUid,
+                accountType: 'public',
+                publicKey: '',
+                createdAt: data.createdAt || new Date().toISOString(),
+              };
             }
           }
 
@@ -185,6 +217,11 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
           mergedMap.set(c.id, {
             ...existing,
             ...c,
+            lastMessageText: c.lastMessageText || existing?.lastMessageText,
+            lastMessageTime: c.lastMessageTime || existing?.lastMessageTime,
+            lastSenderUid: c.lastSenderUid || existing?.lastSenderUid,
+            lastMessageStatus: c.lastMessageStatus || existing?.lastMessageStatus,
+            lastReaction: c.lastReaction || existing?.lastReaction,
             otherUser: c.otherUser || existing?.otherUser,
             isPinned: existing?.isPinned,
             isMuted: existing?.isMuted,
@@ -192,7 +229,7 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         });
 
         const finalList = Array.from(mergedMap.values()).sort(
-          (a, b) => new Date(b.updatedAt || 0).getTime() - new Date(a.updatedAt || 0).getTime()
+          (a, b) => new Date(b.lastMessageTime || b.updatedAt || 0).getTime() - new Date(a.lastMessageTime || a.updatedAt || 0).getTime()
         );
 
         setConversations(finalList);
@@ -267,6 +304,19 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
                 if (selectedConversationRef.current && selectedConversationRef.current.id === data.conversationId) {
                   setMessages((prev) => prev.map((m) => (m.id === data.messageId ? updatedFound : m)));
                 }
+
+                // Update conversation activity with reaction so recipient sees it in Messages list!
+                setConversations((prev) => prev.map((c) => {
+                  if (c.id === data.conversationId) {
+                    const updated = {
+                      ...c,
+                      lastReaction: data.action === 'remove' ? undefined : { emoji: data.emoji, uid: data.senderUid },
+                    };
+                    saveLocalConversation(updated);
+                    return updated;
+                  }
+                  return c;
+                }));
               }
               deleteDoc(doc(db, 'messages', msgId)).catch(() => {});
               continue;
@@ -350,7 +400,7 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
             const convId = data.conversationId;
             const isDeleted = await isConversationDeleted(convId);
             if (!isDeleted) {
-              const previewText = content.text || (content.imageBase64 ? 'Photo' : 'New message');
+              const previewText = content.text || (content.voiceAudioBase64 ? `🎤 Voice message (${content.voiceDurationSeconds || 0}s)` : (content.imageBase64 ? 'Photo' : 'New message'));
 
               // Ensure senderProfile has full name and username
               let resolvedSenderProfile = senderProfile;
@@ -372,6 +422,8 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
                     otherUser: existing.otherUser || resolvedSenderProfile,
                     lastMessageText: previewText,
                     lastMessageTime: decryptedMsg.timestamp,
+                    lastSenderUid: data.senderUid,
+                    lastMessageStatus: 'delivered',
                     updatedAt: decryptedMsg.timestamp,
                     unreadCount: isCurrentlySelected ? 0 : (existing.unreadCount || 0) + 1,
                   };
@@ -387,6 +439,8 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
                     otherUser: resolvedSenderProfile,
                     lastMessageText: previewText,
                     lastMessageTime: decryptedMsg.timestamp,
+                    lastSenderUid: data.senderUid,
+                    lastMessageStatus: 'delivered',
                     unreadCount: isCurrentlySelected ? 0 : 1,
                   };
                   saveLocalConversation(newConv);
@@ -461,17 +515,11 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   const startOrGetConversation = async (otherUserUid: string): Promise<Conversation> => {
     if (!user) throw new Error('Not authenticated.');
 
-    // 1. Check existing in memory
-    const existing = conversations.find((c) => c.participants.includes(otherUserUid));
-    if (existing) {
-      await selectConversation(existing);
-      return existing;
-    }
-
-    // 2. Deterministic Conversation ID
     const convId = getDeterministicConversationId(user.uid, otherUserUid);
+    // Unmark as deleted so it can never be suppressed if deleted previously
+    await unmarkConversationAsDeleted(convId);
 
-    // 3. Resolve peer contact profile
+    // Resolve peer contact profile
     let otherUser: UserProfile | undefined = undefined;
     try {
       const otherProfileSnap = await getDoc(doc(db, 'public_profiles', otherUserUid));
@@ -480,7 +528,51 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       }
     } catch (e) {}
 
+    // 1. Check existing in memory
+    const existing = conversations.find((c) => c.id === convId || c.participants.includes(otherUserUid));
+    if (existing) {
+      const merged: Conversation = {
+        ...existing,
+        id: convId,
+        otherUser: otherUser || existing.otherUser,
+      };
+      await saveLocalConversation(merged, true);
+      setConversations((prev) => [merged, ...prev.filter((c) => c.id !== convId)]);
+      await selectConversation(merged);
+      return merged;
+    }
+
+    // 2. Check existing in local IndexedDB
+    const localExisting = await getLocalConversation(convId);
+    if (localExisting) {
+      const merged: Conversation = {
+        ...localExisting,
+        otherUser: otherUser || localExisting.otherUser,
+      };
+      await saveLocalConversation(merged, true);
+      setConversations((prev) => [merged, ...prev.filter((c) => c.id !== convId)]);
+      await selectConversation(merged);
+      return merged;
+    }
+
     const nowIso = new Date().toISOString();
+    const participantDetails: Record<string, Partial<UserProfile>> = {
+      [user.uid]: {
+        uid: user.uid,
+        username: profile?.username || user.uid,
+        fullName: profile?.fullName || profile?.username || 'User',
+        photoURL: profile?.photoURL || '',
+        publicKey: profile?.publicKey || '',
+      },
+      [otherUserUid]: {
+        uid: otherUserUid,
+        username: otherUser?.username || 'contact',
+        fullName: otherUser?.fullName || otherUser?.username || 'Contact',
+        photoURL: otherUser?.photoURL || '',
+        publicKey: otherUser?.publicKey || '',
+      },
+    };
+
     const newConv: Conversation = {
       id: convId,
       participants: [user.uid, otherUserUid],
@@ -488,9 +580,10 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       createdAt: nowIso,
       updatedAt: nowIso,
       otherUser,
+      participantDetails,
     };
 
-    // Save to Firestore
+    // Save to Firestore with participant details
     try {
       await setDoc(
         doc(db, 'conversations', convId),
@@ -498,6 +591,7 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
           id: convId,
           participants: newConv.participants,
           ephemeralSetting: newConv.ephemeralSetting,
+          participantDetails,
           createdAt: nowIso,
           updatedAt: nowIso,
         },
@@ -507,7 +601,7 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       console.warn('Notice saving cloud conversation:', err);
     }
 
-    await saveLocalConversation(newConv);
+    await saveLocalConversation(newConv, true);
     setConversations((prev) => [newConv, ...prev.filter((c) => c.id !== convId)]);
     await selectConversation(newConv);
 
@@ -783,6 +877,149 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     }
   };
 
+  // Send Encrypted Voice Message (WhatsApp-style E2EE voice note)
+  const sendVoiceMessage = async (audioBlob: Blob, durationSeconds: number): Promise<void> => {
+    if (!user || !selectedConversation) return;
+
+    let privKey = await getLocalPrivateKey();
+    if (!privKey) {
+      const stored = await getKeyStoreItem('plainPrivateKey');
+      privKey = stored?.data || null;
+    }
+    if (!privKey) {
+      const newKeys = generateIdentityKeyPair();
+      privKey = newKeys.privateKey;
+      try {
+        localStorage.setItem(`aegis_priv_${user.uid}`, privKey);
+        localStorage.setItem('aegis_plain_priv_key', privKey);
+      } catch (e) {}
+      saveKeyStoreItem('plainPrivateKey', privKey).catch(() => {});
+    }
+
+    const recipientUid = selectedConversation.participants.find((p) => p !== user.uid);
+    if (!recipientUid) return;
+
+    let recipientPubKey: string | undefined = undefined;
+    try {
+      const recipientSnap = await getDoc(doc(db, 'public_profiles', recipientUid));
+      if (recipientSnap.exists()) {
+        recipientPubKey = recipientSnap.data().publicKey;
+      }
+    } catch (e) {}
+
+    if (!recipientPubKey) {
+      try {
+        const prekeySnap = await getDoc(doc(db, 'prekeys', recipientUid));
+        if (prekeySnap.exists()) {
+          recipientPubKey = prekeySnap.data().signedPrekey;
+        }
+      } catch (e) {}
+    }
+
+    if (!recipientPubKey) {
+      recipientPubKey = selectedConversation.otherUser?.publicKey;
+    }
+
+    if (!recipientPubKey) {
+      recipientPubKey = conversations.find((c) => c.participants.includes(recipientUid))?.otherUser?.publicKey;
+    }
+
+    if (!recipientPubKey) {
+      throw new Error('Recipient identity key not found.');
+    }
+
+    const senderPubKey = getPublicKeyFromPrivateKey(privKey);
+    if (profile && profile.publicKey !== senderPubKey) {
+      updateDoc(doc(db, 'public_profiles', user.uid), { publicKey: senderPubKey }).catch(() => {});
+    }
+
+    // Convert audio Blob to base64 Data URL
+    const voiceAudioBase64 = await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onloadend = () => resolve(reader.result as string);
+      reader.onerror = reject;
+      reader.readAsDataURL(audioBlob);
+    });
+
+    const roundedSec = Math.max(1, Math.round(durationSeconds));
+    const content: PlaintextMessageContent = {
+      voiceAudioBase64,
+      voiceDurationSeconds: roundedSec,
+      text: '',
+    };
+
+    const ciphertext = await encryptE2EEPayload(JSON.stringify(content), recipientPubKey, privKey);
+    const msgId = `msg_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
+    const nowIso = new Date().toISOString();
+    const expiresAtMs = calculateExpiresAt(selectedConversation.ephemeralSetting);
+
+    const localMsg: DecryptedMessage = {
+      id: msgId,
+      conversationId: selectedConversation.id,
+      senderUid: user.uid,
+      recipientUid,
+      content,
+      ephemeralType: selectedConversation.ephemeralSetting,
+      status: 'sending',
+      timestamp: nowIso,
+      expiresAtTimestamp: expiresAtMs,
+    };
+
+    await saveLocalMessage(localMsg);
+    setMessages((prev) => [...prev, localMsg]);
+
+    const preview = `🎤 Voice message (${roundedSec}s)`;
+    const updatedConv: Conversation = {
+      ...selectedConversation,
+      lastMessageText: preview,
+      lastMessageTime: nowIso,
+      lastSenderUid: user.uid,
+      lastMessageStatus: 'sending',
+      updatedAt: nowIso,
+    };
+    setSelectedConversation(updatedConv);
+    await saveLocalConversation(updatedConv, true);
+    setConversations((prev) => [updatedConv, ...prev.filter((c) => c.id !== selectedConversation.id)]);
+
+    try {
+      await setDoc(doc(db, 'messages', msgId), {
+        conversationId: selectedConversation.id,
+        senderUid: user.uid,
+        senderUsername: profile?.username || user.uid,
+        senderFullName: profile?.fullName || profile?.username || 'User',
+        senderPhotoURL: profile?.photoURL || '',
+        senderPublicKey: senderPubKey,
+        recipientUid,
+        ciphertext,
+        ephemeralType: selectedConversation.ephemeralSetting,
+        createdAt: nowIso,
+      });
+
+      await setDoc(
+        doc(db, 'conversations', selectedConversation.id),
+        {
+          id: selectedConversation.id,
+          participants: selectedConversation.participants,
+          ephemeralSetting: selectedConversation.ephemeralSetting,
+          lastMessageText: preview,
+          lastMessageTime: nowIso,
+          lastSenderUid: user.uid,
+          updatedAt: nowIso,
+        },
+        { merge: true }
+      );
+
+      localMsg.status = 'delivered';
+      await saveLocalMessage(localMsg);
+      setMessages((prev) => prev.map((m) => (m.id === msgId ? { ...m, status: 'delivered' } : m)));
+    } catch (err) {
+      console.warn('Notice sending voice message:', err);
+      localMsg.status = 'sent';
+      await saveLocalMessage(localMsg);
+      setMessages((prev) => prev.map((m) => (m.id === msgId ? { ...m, status: 'sent' } : m)));
+    }
+  };
+
   // Update Ephemeral Setting
   const updateEphemeralSetting = async (setting: EphemeralSetting): Promise<void> => {
     if (!selectedConversation) return;
@@ -794,7 +1031,7 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     };
 
     setSelectedConversation(updated);
-    await saveLocalConversation(updated);
+    await saveLocalConversation(updated, true);
     setConversations((prev) => prev.map((c) => (c.id === updated.id ? updated : c)));
 
     try {
@@ -831,6 +1068,37 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     await saveLocalMessage(updatedMsg);
     setMessages((prev) => prev.map((m) => (m.id === messageId ? updatedMsg : m)));
 
+    // Update conversation lastReaction activity so user & recipient see it in Messages list!
+    const reactionObj = isRemoving
+      ? undefined
+      : {
+          emoji,
+          uid: user.uid,
+          username: profile?.username || 'You',
+          timestamp: new Date().toISOString(),
+        };
+
+    setConversations((prev) =>
+      prev.map((c) => {
+        if (c.id === msg.conversationId) {
+          const updatedConv = {
+            ...c,
+            lastReaction: reactionObj,
+          };
+          saveLocalConversation(updatedConv, true);
+          return updatedConv;
+        }
+        return c;
+      })
+    );
+
+    // Update Firestore conversation doc with reaction
+    try {
+      updateDoc(doc(db, 'conversations', msg.conversationId), {
+        lastReaction: reactionObj || null,
+      }).catch(() => {});
+    } catch (e) {}
+
     // Relay reaction to peer contact in Firestore
     const recipientUid = msg.senderUid === user.uid ? msg.recipientUid : msg.senderUid;
     if (recipientUid) {
@@ -842,6 +1110,7 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         messageId,
         emoji,
         senderUid: user.uid,
+        senderUsername: profile?.username || 'user',
         recipientUid,
         createdAt: new Date().toISOString(),
       }).catch(() => {});
@@ -877,14 +1146,27 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     }
   };
 
-  // Pin / Mute Conversation
-  const togglePinConversation = async (conversationId: string): Promise<void> => {
-    const conv = conversations.find((c) => c.id === conversationId);
-    if (!conv) return;
+  // Pin / Mute Conversation (Strictly maximum 5 pinned chats allowed)
+  const [pinLimitNotice, setPinLimitNotice] = useState<string | null>(null);
+  const clearPinNotice = () => setPinLimitNotice(null);
 
+  const togglePinConversation = async (conversationId: string): Promise<boolean> => {
+    const conv = conversations.find((c) => c.id === conversationId);
+    if (!conv) return false;
+
+    if (!conv.isPinned) {
+      const currentlyPinned = conversations.filter((c) => c.isPinned).length;
+      if (currentlyPinned >= 5) {
+        setPinLimitNotice('Maximum 5 pinned chats allowed. Please unpin another chat first.');
+        return false;
+      }
+    }
+
+    setPinLimitNotice(null);
     const updated = { ...conv, isPinned: !conv.isPinned };
-    await saveLocalConversation(updated);
+    await saveLocalConversation(updated, true);
     setConversations((prev) => prev.map((c) => (c.id === conversationId ? updated : c)));
+    return true;
   };
 
   const toggleMuteConversation = async (conversationId: string): Promise<void> => {
@@ -892,7 +1174,7 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     if (!conv) return;
 
     const updated = { ...conv, isMuted: !conv.isMuted };
-    await saveLocalConversation(updated);
+    await saveLocalConversation(updated, true);
     setConversations((prev) => prev.map((c) => (c.id === conversationId ? updated : c)));
   };
 
@@ -910,6 +1192,7 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         startOrGetConversation,
         sendTextMessage,
         sendImageMessage,
+        sendVoiceMessage,
         updateEphemeralSetting,
         addMessageReaction,
         deleteMessageLocally,
@@ -917,6 +1200,8 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         togglePinConversation,
         toggleMuteConversation,
         pinnedConversations,
+        pinLimitNotice,
+        clearPinNotice,
       }}
     >
       {children}

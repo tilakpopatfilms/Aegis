@@ -8,7 +8,11 @@ import {
   Trash2,
   Plus,
   CheckCheck,
+  Check,
   MoreVertical,
+  Mic,
+  AlertCircle,
+  X,
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { useChat } from '../../context/ChatContext';
@@ -27,6 +31,8 @@ export const ChatsView: React.FC<ChatsViewProps> = ({ onOpenSearch }) => {
     togglePinConversation,
     toggleMuteConversation,
     deleteConversationLocally,
+    pinLimitNotice,
+    clearPinNotice,
   } = useChat();
 
   const [searchQuery, setSearchQuery] = useState('');
@@ -83,9 +89,11 @@ export const ChatsView: React.FC<ChatsViewProps> = ({ onOpenSearch }) => {
   const renderConversationItem = (c: Conversation) => {
     const isSelected = selectedConversation?.id === c.id;
     const name = c.otherUser?.fullName || `@${c.otherUser?.username || 'contact'}`;
-    const username = c.otherUser?.username || 'user';
+    const username = c.otherUser?.username || 'contact';
     const photo = c.otherUser?.photoURL;
     const hasCustomPhoto = photo && !photo.startsWith('data:image/svg+xml;utf8');
+    const isSentByMe = c.lastSenderUid === profile?.uid;
+    const isVoiceMessage = c.lastMessageText?.startsWith('🎤 Voice message');
 
     return (
       <div
@@ -134,21 +142,59 @@ export const ChatsView: React.FC<ChatsViewProps> = ({ onOpenSearch }) => {
           )}
         </div>
 
-        {/* Text information */}
+        {/* Text information (Receipt) */}
         <div className="flex-1 min-w-0">
           <div className="flex items-center justify-between mb-0.5">
-            <span className="font-semibold text-xs text-neutral-900 dark:text-white truncate">
-              {name}
-            </span>
-            <span className="text-[10px] text-neutral-400 shrink-0 font-normal">
+            <div className="flex items-center space-x-1.5 truncate">
+              <span className="font-semibold text-xs text-neutral-900 dark:text-white truncate">
+                {name}
+              </span>
+              <span className="text-[10px] text-neutral-500 font-mono shrink-0">
+                @{username}
+              </span>
+            </div>
+            <span className="text-[10px] text-neutral-400 shrink-0 font-normal ml-2">
               {formatTime(c.lastMessageTime || c.updatedAt)}
             </span>
           </div>
 
           <div className="flex items-center justify-between text-xs text-neutral-500 dark:text-neutral-400">
-            <p className="truncate text-[11px] flex-1 pr-2">
-              {c.lastMessageText || 'Encrypted conversation ready'}
-            </p>
+            <div className="truncate text-[11px] flex-1 pr-2 flex items-center space-x-1">
+              {/* Reaction Activity Badge */}
+              {c.lastReaction ? (
+                <span className="inline-flex items-center space-x-1 text-emerald-400 font-medium bg-emerald-500/10 px-1.5 py-0.5 rounded-md text-[10px] mr-1 shrink-0">
+                  <span>{c.lastReaction.emoji}</span>
+                  <span>
+                    {c.lastReaction.uid === profile?.uid
+                      ? 'You reacted'
+                      : `${c.lastReaction.username || username} reacted`}
+                  </span>
+                </span>
+              ) : null}
+
+              {/* Sender Status Checkmarks */}
+              {isSentByMe && !c.lastReaction && (
+                <span className="shrink-0 inline-flex items-center mr-0.5">
+                  {c.lastMessageStatus === 'delivered' || c.lastMessageStatus === 'read' ? (
+                    <CheckCheck className="w-3.5 h-3.5 text-emerald-400" />
+                  ) : (
+                    <Check className="w-3.5 h-3.5 text-neutral-400" />
+                  )}
+                </span>
+              )}
+
+              {/* Voice Message Indicator or Text */}
+              {isVoiceMessage ? (
+                <span className="inline-flex items-center text-emerald-400 font-medium space-x-1 truncate">
+                  <Mic className="w-3 h-3 shrink-0" />
+                  <span className="truncate">{c.lastMessageText}</span>
+                </span>
+              ) : (
+                <span className="truncate">
+                  {c.lastMessageText || 'Encrypted conversation ready'}
+                </span>
+              )}
+            </div>
 
             <div className="flex items-center space-x-1.5 shrink-0">
               {c.isMuted && (
@@ -224,9 +270,14 @@ export const ChatsView: React.FC<ChatsViewProps> = ({ onOpenSearch }) => {
     <div className="h-full flex flex-col bg-white dark:bg-[#0c0c0e] border-r border-neutral-200 dark:border-neutral-800 select-none overflow-hidden">
       {/* Top Header of Chats */}
       <div className="px-4 py-3 bg-white dark:bg-[#0c0c0e] border-b border-neutral-200 dark:border-neutral-800 flex items-center justify-between shrink-0">
-        <h2 className="text-base font-bold tracking-tight text-neutral-900 dark:text-white">
-          Messages
-        </h2>
+        <div className="flex items-center space-x-2">
+          <h2 className="text-base font-bold tracking-tight text-neutral-900 dark:text-white">
+            Messages
+          </h2>
+          <span className="text-[10px] text-neutral-400 font-mono">
+            ({conversations.length})
+          </span>
+        </div>
 
         <button
           onClick={onOpenSearch}
@@ -236,6 +287,22 @@ export const ChatsView: React.FC<ChatsViewProps> = ({ onOpenSearch }) => {
           <Plus className="w-4 h-4" />
         </button>
       </div>
+
+      {/* Pin Limit Notice Alert */}
+      {pinLimitNotice && (
+        <div className="px-3 py-2 bg-amber-500/10 border-b border-amber-500/30 flex items-center justify-between text-xs text-amber-400 shrink-0">
+          <div className="flex items-center space-x-2 truncate">
+            <AlertCircle className="w-4 h-4 shrink-0 text-amber-400" />
+            <span className="text-[11px] font-medium truncate">{pinLimitNotice}</span>
+          </div>
+          <button
+            onClick={clearPinNotice}
+            className="p-1 hover:text-white text-amber-400/80 rounded"
+          >
+            <X className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      )}
 
       {/* Search Bar & Filters */}
       <div className="p-3 bg-white dark:bg-[#0c0c0e] border-b border-neutral-200 dark:border-neutral-800 space-y-2 shrink-0">

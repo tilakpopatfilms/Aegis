@@ -1,6 +1,7 @@
 import React from 'react';
 import { Shield, Lock, MessageSquare, Search, User, LogOut } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
+import { useChat } from '../context/ChatContext';
 import { PWAInstallButton } from './pwa/PWAInstallButton';
 
 interface HeaderProps {
@@ -10,6 +11,7 @@ interface HeaderProps {
 
 export const Header: React.FC<HeaderProps> = ({ currentPath, onNavigate }) => {
   const { user, profile, logout } = useAuth();
+  const { selectConversation } = useChat();
 
   const initials = profile?.fullName
     ? profile.fullName
@@ -30,7 +32,10 @@ export const Header: React.FC<HeaderProps> = ({ currentPath, onNavigate }) => {
         {/* Brand identity */}
         <div
           className="flex items-center space-x-3 cursor-pointer select-none"
-          onClick={() => onNavigate(user ? '/chat' : '/home')}
+          onClick={() => {
+            selectConversation(null);
+            onNavigate(user ? '/chat' : '/home');
+          }}
         >
           <div className="w-8 h-8 rounded-full bg-neutral-900 dark:bg-white text-white dark:text-neutral-900 flex items-center justify-center font-bold">
             <Shield className="w-4 h-4" />
@@ -51,7 +56,10 @@ export const Header: React.FC<HeaderProps> = ({ currentPath, onNavigate }) => {
         {user && (
           <div className="hidden sm:flex items-center space-x-1 bg-neutral-100 dark:bg-[#18181b] p-1 rounded-xl border border-neutral-200 dark:border-neutral-800">
             <button
-              onClick={() => onNavigate('/chat')}
+              onClick={() => {
+                selectConversation(null);
+                onNavigate('/chat');
+              }}
               className={`flex items-center space-x-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
                 isChatActive
                   ? 'bg-white dark:bg-neutral-900 text-neutral-900 dark:text-white shadow-xs'

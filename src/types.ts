@@ -50,13 +50,17 @@ export interface Conversation {
   ephemeralSetting: EphemeralSetting;
   createdAt: string;
   updatedAt: string;
-  // Local transient fields:
+  // Local transient and cloud fields:
   otherUser?: UserProfile;
   unreadCount?: number;
   lastMessageText?: string;
   lastMessageTime?: string;
+  lastMessageStatus?: 'sending' | 'sent' | 'delivered' | 'read';
+  lastSenderUid?: string;
+  lastReaction?: { emoji: string; uid: string; username?: string; timestamp?: string };
   isPinned?: boolean;
   isMuted?: boolean;
+  participantDetails?: Record<string, Partial<UserProfile>>;
 }
 
 export interface EncryptedMessagePayload {
@@ -75,6 +79,8 @@ export interface PlaintextMessageContent {
   imageBlobUrl?: string; // Local Object URL for decrypted images
   imageBase64?: string;
   fileName?: string;
+  voiceAudioBase64?: string; // Base64 encoded audio for WhatsApp-style voice messages
+  voiceDurationSeconds?: number; // Duration in seconds
   replyToId?: string;
   reactions?: Record<string, string[]>; // reactionEmoji -> array of uids
 }

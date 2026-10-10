@@ -20,12 +20,14 @@ import {
   Smile,
   Pin,
   VolumeX,
+  Mic,
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { useChat } from '../../context/ChatContext';
 import { EphemeralSetting, DecryptedMessage, UserProfile } from '../../types';
 import { generateSafetyNumber } from '../../crypto/crypto';
 import { saveSafetyNumber, getSafetyNumber } from '../../db/localDb';
+import { VoiceAudioPlayer } from './VoiceAudioPlayer';
 
 const PRIMARY_EMOJIS = ['👍', '🥳', '🔥', '❤️', '😡', '🙂'];
 const EXTENDED_EMOJIS = ['😂', '🙏', '👏', '🎉', '💔', '👀', '🚀', '💯', '✨', '⚡', '😍', '🤔'];
@@ -41,6 +43,7 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({ onBack }) => {
     messages,
     sendTextMessage,
     sendImageMessage,
+    sendVoiceMessage,
     updateEphemeralSetting,
     deleteMessageLocally,
     deleteConversationLocally,
@@ -79,6 +82,23 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({ onBack }) => {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+
+  // WhatsApp-style Voice Recording State & Refs
+  const [isRecording, setIsRecording] = useState(false);
+  const [recordingSeconds, setRecordingSeconds] = useState(0);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
+  const recordingTimerRef = useRef<any>(null);
+  const audioStreamRef = useRef<MediaStream | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (recordingTimerRef.current) clearInterval(recordingTimerRef.current);
+      if (audioStreamRef.current) {
+        audioStreamRef.current.getTracks().forEach((t) => t.stop());
+      }
+    };
+  }, []);
 
   // Auto-scroll to latest message on change
   useEffect(() => {
@@ -161,6 +181,98 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({ onBack }) => {
         setSendError(err.message || 'Failed to send image.');
       }
     }
+  };
+
+  const startVoiceRecording = async () => {
+    try {
+      setSendError(null);
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      audioStreamRef.current = stream;
+
+      const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+        ? 'audio/webm;codecs=opus'
+        : MediaRecorder.isTypeSupported('audio/mp4')
+        ? 'audio/mp4'
+        : 'audio/webm';
+
+      const mediaRecorder = new MediaRecorder(stream, { mimeType });
+      mediaRecorderRef.current = mediaRecorder;
+      audioChunksRef.current = [];
+
+      mediaRecorder.ondataavailable = (e) => {
+        if (e.data && e.data.size > 0) {
+          audioChunksRef.current.push(e.data);
+        }
+      };
+
+      mediaRecorder.start(100);
+      setIsRecording(true);
+      setRecordingSeconds(0);
+
+      recordingTimerRef.current = setInterval(() => {
+        setRecordingSeconds((prev) => prev + 1);
+      }, 1000);
+    } catch (err: any) {
+      console.warn('Microphone access notice:', err);
+      setSendError('Microphone access was denied or is not supported.');
+    }
+  };
+
+  const cancelVoiceRecording = () => {
+    if (recordingTimerRef.current) {
+      clearInterval(recordingTimerRef.current);
+      recordingTimerRef.current = null;
+    }
+
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+      mediaRecorderRef.current.stop();
+    }
+
+    if (audioStreamRef.current) {
+      audioStreamRef.current.getTracks().forEach((t) => t.stop());
+      audioStreamRef.current = null;
+    }
+
+    audioChunksRef.current = [];
+    setIsRecording(false);
+    setRecordingSeconds(0);
+  };
+
+  const stopAndSendVoiceRecording = async () => {
+    if (!mediaRecorderRef.current || mediaRecorderRef.current.state === 'inactive') return;
+
+    if (recordingTimerRef.current) {
+      clearInterval(recordingTimerRef.current);
+      recordingTimerRef.current = null;
+    }
+
+    const duration = Math.max(1, recordingSeconds);
+
+    mediaRecorderRef.current.onstop = async () => {
+      try {
+        const audioBlob = new Blob(audioChunksRef.current, {
+          type: mediaRecorderRef.current?.mimeType || 'audio/webm',
+        });
+
+        if (audioStreamRef.current) {
+          audioStreamRef.current.getTracks().forEach((t) => t.stop());
+          audioStreamRef.current = null;
+        }
+
+        setIsRecording(false);
+        setRecordingSeconds(0);
+
+        setSending(true);
+        await sendVoiceMessage(audioBlob, duration);
+      } catch (err: any) {
+        console.warn('Failed to send voice message:', err);
+        setSendError(err.message || 'Failed to send voice message.');
+      } finally {
+        setSending(false);
+      }
+    };
+
+    mediaRecorderRef.current.stop();
   };
 
   const handleToggleStar = (msgId: string) => {
@@ -388,8 +500,11 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({ onBack }) => {
         <div className="absolute top-14 right-3 z-30 bg-[#18181b] rounded-2xl shadow-2xl border border-neutral-800 p-1.5 text-xs w-56 text-neutral-200 divide-y divide-neutral-800/80">
           <div className="py-1">
             <button
-              onClick={() => {
-                togglePinConversation(selectedConversation.id);
+              onClick={async () => {
+                const ok = await togglePinConversation(selectedConversation.id);
+                if (!ok) {
+                  setSendError('Maximum 5 pinned chats allowed. Please unpin another chat first.');
+                }
                 setShowOptionsMenu(false);
               }}
               className="w-full text-left px-3 py-2 rounded-lg hover:bg-[#202024] flex items-center space-x-2 transition-colors"
@@ -687,6 +802,17 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({ onBack }) => {
                   </div>
                 )}
 
+                {/* Voice Audio Message Player (WhatsApp style) */}
+                {m.content.voiceAudioBase64 && (
+                  <div className="mb-1">
+                    <VoiceAudioPlayer
+                      audioBase64={m.content.voiceAudioBase64}
+                      durationSeconds={m.content.voiceDurationSeconds}
+                      isSender={isSender}
+                    />
+                  </div>
+                )}
+
                 {/* Plaintext Content */}
                 {m.content.text && (
                   <p className="whitespace-pre-wrap break-words leading-relaxed select-text">
@@ -829,46 +955,105 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({ onBack }) => {
         </div>
       )}
 
-      {/* Message Composer (Always pinned at bottom) */}
-      <form
-        onSubmit={handleSendText}
-        className="p-3 sm:p-4 bg-white dark:bg-[#121215] border-t border-neutral-200 dark:border-neutral-800 flex items-center space-x-2 shrink-0 z-20"
-      >
-        <input
-          type="file"
-          ref={fileInputRef}
-          accept="image/*"
-          onChange={handleFileChange}
-          className="hidden"
-        />
+      {/* Message Composer / WhatsApp-style Voice Recording Bar (Always pinned at bottom) */}
+      {isRecording ? (
+        <div className="p-3 sm:p-4 bg-white dark:bg-[#121215] border-t border-neutral-200 dark:border-neutral-800 flex items-center justify-between space-x-3 shrink-0 z-20">
+          <div className="flex items-center space-x-3 flex-1 min-w-0">
+            {/* Pulsing Red Recording Indicator */}
+            <div className="flex items-center space-x-2 shrink-0">
+              <span className="w-2.5 h-2.5 rounded-full bg-red-500 animate-pulse shrink-0" />
+              <span className="text-xs font-mono font-bold text-red-500 dark:text-red-400">
+                {Math.floor(recordingSeconds / 60)}:{(recordingSeconds % 60) < 10 ? '0' : ''}{recordingSeconds % 60}
+              </span>
+            </div>
 
-        <button
-          type="button"
-          onClick={() => fileInputRef.current?.click()}
-          className="p-2 text-neutral-500 hover:text-neutral-900 dark:hover:text-white hover:bg-neutral-100 dark:hover:bg-neutral-800 rounded-xl transition-colors shrink-0"
-          title="Send Encrypted Image"
+            {/* Visualizer animation bars */}
+            <div className="flex items-center space-x-1 flex-1 overflow-hidden h-5 max-w-xs">
+              {[40, 70, 90, 50, 80, 100, 60, 40, 75, 95, 60, 85, 50, 70, 90, 60, 45, 80].map((h, i) => (
+                <div
+                  key={i}
+                  style={{ height: `${h}%` }}
+                  className="w-1 bg-emerald-500 rounded-full animate-pulse"
+                />
+              ))}
+            </div>
+          </div>
+
+          <div className="flex items-center space-x-2 shrink-0">
+            {/* Cancel & Discard Button */}
+            <button
+              type="button"
+              onClick={cancelVoiceRecording}
+              className="p-2 text-neutral-400 hover:text-rose-500 hover:bg-neutral-100 dark:hover:bg-neutral-800 rounded-xl transition-colors"
+              title="Cancel recording"
+            >
+              <Trash2 className="w-4 h-4" />
+            </button>
+
+            {/* Send Voice Message Button */}
+            <button
+              type="button"
+              onClick={stopAndSendVoiceRecording}
+              disabled={sending}
+              className="p-2.5 bg-emerald-500 hover:bg-emerald-400 text-white rounded-xl transition-transform active:scale-95 shadow-sm"
+              title="Send voice note"
+            >
+              <Send className="w-4 h-4" />
+            </button>
+          </div>
+        </div>
+      ) : (
+        <form
+          onSubmit={handleSendText}
+          className="p-3 sm:p-4 bg-white dark:bg-[#121215] border-t border-neutral-200 dark:border-neutral-800 flex items-center space-x-2 shrink-0 z-20"
         >
-          <Paperclip className="w-4 h-4" />
-        </button>
+          <input
+            type="file"
+            ref={fileInputRef}
+            accept="image/*"
+            onChange={handleFileChange}
+            className="hidden"
+          />
 
-        <input
-          ref={inputRef}
-          type="text"
-          value={textInput}
-          onChange={(e) => setTextInput(e.target.value)}
-          placeholder="Type an encrypted message..."
-          className="flex-1 px-3.5 py-2.5 bg-neutral-100 dark:bg-[#18181b] rounded-xl text-xs text-neutral-900 dark:text-neutral-100 placeholder-neutral-400 border border-neutral-200 dark:border-neutral-800 focus:outline-none focus:border-neutral-900 dark:focus:border-white transition-colors"
-        />
+          <button
+            type="button"
+            onClick={() => fileInputRef.current?.click()}
+            className="p-2 text-neutral-500 hover:text-neutral-900 dark:hover:text-white hover:bg-neutral-100 dark:hover:bg-neutral-800 rounded-xl transition-colors shrink-0"
+            title="Send Encrypted Image"
+          >
+            <Paperclip className="w-4 h-4" />
+          </button>
 
-        <button
-          type="submit"
-          disabled={!textInput.trim()}
-          className="p-2.5 bg-neutral-900 hover:bg-neutral-800 dark:bg-white dark:hover:bg-neutral-200 text-white dark:text-neutral-900 rounded-xl transition-colors disabled:opacity-40 shrink-0 shadow-xs"
-          title="Send"
-        >
-          <Send className="w-4 h-4" />
-        </button>
-      </form>
+          <input
+            ref={inputRef}
+            type="text"
+            value={textInput}
+            onChange={(e) => setTextInput(e.target.value)}
+            placeholder="Type an encrypted message..."
+            className="flex-1 px-3.5 py-2.5 bg-neutral-100 dark:bg-[#18181b] rounded-xl text-xs text-neutral-900 dark:text-neutral-100 placeholder-neutral-400 border border-neutral-200 dark:border-neutral-800 focus:outline-none focus:border-neutral-900 dark:focus:border-white transition-colors"
+          />
+
+          {textInput.trim() ? (
+            <button
+              type="submit"
+              disabled={!textInput.trim() || sending}
+              className="p-2.5 bg-neutral-900 hover:bg-neutral-800 dark:bg-white dark:hover:bg-neutral-200 text-white dark:text-neutral-900 rounded-xl transition-colors disabled:opacity-40 shrink-0 shadow-xs"
+              title="Send"
+            >
+              <Send className="w-4 h-4" />
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={startVoiceRecording}
+              className="p-2.5 bg-neutral-100 dark:bg-[#18181b] hover:bg-neutral-200 dark:hover:bg-[#202024] text-emerald-500 rounded-xl transition-transform active:scale-95 shrink-0 shadow-xs border border-neutral-200 dark:border-neutral-800"
+              title="Record voice message (WhatsApp style)"
+            >
+              <Mic className="w-4 h-4" />
+            </button>
+          )}
+        </form>
+      )}
 
       {/* Modal: Safety Number Verification */}
       {showSafetyModal && (
