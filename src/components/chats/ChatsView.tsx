@@ -137,15 +137,6 @@ export const ChatsView: React.FC<ChatsViewProps> = ({ onOpenSearch }) => {
               {c.unreadCount > 99 ? '99+' : c.unreadCount}
             </span>
           ) : null}
-
-          {c.ephemeralSetting && c.ephemeralSetting !== 'off' && (
-            <span
-              className="absolute -bottom-0.5 -right-0.5 p-0.5 bg-neutral-900 dark:bg-white text-white dark:text-neutral-900 rounded-full text-[8px] border border-white dark:border-black"
-              title={`Disappearing: ${c.ephemeralSetting}`}
-            >
-              <Clock className="w-2.5 h-2.5" />
-            </span>
-          )}
         </div>
 
         {/* Text information (Receipt) */}

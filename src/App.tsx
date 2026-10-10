@@ -198,15 +198,15 @@ const MainApp: React.FC = () => {
       ) : (
         /* Authenticated Main App: WhatsApp Layout */
         <main
-          className={`flex-1 w-full max-w-6xl mx-auto flex flex-col md:flex-row overflow-hidden ${
+          className={`flex-1 w-full max-w-6xl mx-auto flex flex-col md:flex-row overflow-hidden min-w-0 ${
             selectedConversation ? 'pb-0' : 'pb-14'
           } sm:pb-0 sm:my-2 rounded-none sm:rounded-2xl border-0 sm:border border-neutral-200 dark:border-neutral-800`}
         >
           {(currentPath === '/chat' || currentPath === '/chats' || currentPath === '/') && (
-            <div className="flex-1 flex w-full h-full overflow-hidden">
+            <div className="flex-1 flex w-full h-full min-w-0 overflow-hidden">
               {/* Left Sidebar: Conversations List */}
               <div
-                className={`w-full md:w-80 lg:w-96 shrink-0 h-full ${
+                className={`w-full md:w-80 lg:w-96 shrink-0 h-full overflow-hidden ${
                   selectedConversation ? 'hidden md:block' : 'block'
                 }`}
               >
@@ -215,7 +215,7 @@ const MainApp: React.FC = () => {
 
               {/* Right Conversation Window */}
               <div
-                className={`flex-1 h-full ${
+                className={`flex-1 h-full min-w-0 w-full overflow-hidden ${
                   !selectedConversation ? 'hidden md:block' : 'block'
                 }`}
               >

@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useState, useEffect, ReactNode, useCallback } from 'react';
-import { doc, getDoc, setDoc, updateDoc } from 'firebase/firestore';
+import { doc, getDoc, setDoc, updateDoc, collection, getDocs, where, query } from 'firebase/firestore';
 import { db } from '../firebase';
 import { UserProfile, AccountType, UserCredentials } from '../types';
 import {
@@ -15,6 +15,7 @@ import {
   saveKeyStoreItem,
   getKeyStoreItem,
   wipeLocalDatabase,
+  saveLocalProfile,
 } from '../db/localDb';
 
 // Module-level synchronous cache for private key so it survives component remounts
@@ -616,7 +617,32 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     const ref = doc(db, 'public_profiles', user.uid);
     try {
       await updateDoc(ref, updates);
-      setProfile((prev) => (prev ? { ...prev, ...updates } : null));
+      const updatedProfile: UserProfile = { ...profile, ...updates };
+      setProfile(updatedProfile);
+      await saveLocalProfile(updatedProfile);
+
+      // Update participantDetails across all conversations involving user so other users immediately see the new name & photo
+      try {
+        const convsQuery = query(collection(db, 'conversations'), where('participants', 'array-contains', user.uid));
+        const convSnaps = await getDocs(convsQuery);
+        for (const cDoc of convSnaps.docs) {
+          const cData = cDoc.data();
+          const existingDetails = cData.participantDetails || {};
+          const myDetails = existingDetails[user.uid] || {};
+          await updateDoc(doc(db, 'conversations', cDoc.id), {
+            [`participantDetails.${user.uid}`]: {
+              ...myDetails,
+              fullName: updatedProfile.fullName,
+              photoURL: updatedProfile.photoURL,
+              bio: updatedProfile.bio || '',
+              username: updatedProfile.username,
+            },
+            updatedAt: new Date().toISOString(),
+          });
+        }
+      } catch (convErr) {
+        console.warn('Notice syncing updated profile to conversations:', convErr);
+      }
     } catch (err) {
       console.error('Error updating profile:', err);
     }

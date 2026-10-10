@@ -1,7 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import {
   Shield,
-  Clock,
   Send,
   Paperclip,
   X,
@@ -21,15 +20,47 @@ import {
   Mic,
   Lock,
 } from 'lucide-react';
+import { doc, onSnapshot } from 'firebase/firestore';
+import { db } from '../../firebase';
 import { useAuth } from '../../context/AuthContext';
 import { useChat } from '../../context/ChatContext';
-import { EphemeralSetting, DecryptedMessage, UserProfile } from '../../types';
+import { DecryptedMessage, UserProfile } from '../../types';
 import { generateSafetyNumber } from '../../crypto/crypto';
-import { saveSafetyNumber, getSafetyNumber } from '../../db/localDb';
+import { saveSafetyNumber, getSafetyNumber, saveLocalProfile } from '../../db/localDb';
 import { VoiceAudioPlayer } from './VoiceAudioPlayer';
 
 const PRIMARY_EMOJIS = ['👍', '❤️', '😂', '😮', '😢', '🙏'];
-const EXTENDED_EMOJIS = ['🔥', '🥳', '👏', '🎉', '💔', '👀', '🚀', '💯', '✨', '⚡', '😍', '🤔', '😡', '🙂', '🤝', '🙌', '💀', '🥰'];
+
+const FULL_EMOJI_CATEGORIES = [
+  {
+    category: 'Smileys & Emotion',
+    emojis: [
+      '😀', '😃', '😄', '😁', '😆', '😅', '🤣', '😂', '🙂', '🙃', '😉', '😊', '😇',
+      '🥰', '😍', '🤩', '😘', '😗', '😋', '😛', '😜', '🤪', '😝', '🤑', '🤗', '🤭',
+      '🤫', '🤔', '🤐', '🤨', '😐', '😑', '😶', '😏', '😒', '🙄', '😬', '🤥', '😌',
+      '😔', '😪', '🤤', '😴', '😷', '🤒', '🤕', '🤢', '🤮', '🤧', '🥵', '🥶', '🥴',
+      '😵', '🤯', '🤠', '🥳', '😎', '🤓', '🧐', '😕', '😟', '🙁', '😮', '😯', '😲',
+      '😳', '🥺', '😦', '😧', '😨', '😰', '😥', '😢', '😭', '😱', '😖', '😣', '😞',
+      '😓', '😩', '😫', '🥱', '😤', '😡', '😠', '🤬', '😈', '👿', '💀', '💩', '🤡',
+    ],
+  },
+  {
+    category: 'Gestures & People',
+    emojis: [
+      '👍', '👎', '👊', '✊', '🤛', '🤜', '🤞', '✌️', '🤟', '🤘', '👌', '🤌', '🤏',
+      '👈', '👉', '👆', '👇', '☝️', '✋', '🤚', '🖐️', '🖖', '👋', '🤙', '💪', '🦾',
+      '🙏', '🤝', '👏', '🙌', '👐', '🤲', '✍️', '💅', '🤳', '💃', '🕺', '🚶', '🏃',
+    ],
+  },
+  {
+    category: 'Hearts & Symbols',
+    emojis: [
+      '❤️', '🧡', '💛', '💚', '💙', '💜', '🖤', '🤍', '🤎', '💔', '❣️', '💕', '💞',
+      '💓', '💗', '💖', '💘', '💝', '💟', '🔥', '✨', '⚡', '💥', '💯', '🎉', '🎊',
+      '🎈', '🎁', '🏆', '⭐', '🌟', '💫', '🎯', '🚀', '🔮', '🧿', '💎', '👑',
+    ],
+  },
+];
 
 interface ChatRoomProps {
   onBack?: () => void;
@@ -43,7 +74,8 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({ onBack }) => {
     sendTextMessage,
     sendImageMessage,
     sendVoiceMessage,
-    updateEphemeralSetting,
+    deleteMessageLocally,
+    deleteMessagesLocally,
     deleteConversationLocally,
     addMessageReaction,
     togglePinConversation,
@@ -53,10 +85,12 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({ onBack }) => {
   const [textInput, setTextInput] = useState('');
   const [replyingTo, setReplyingTo] = useState<DecryptedMessage | null>(null);
 
-  // Selected message state (activated ONLY upon holding a message)
-  const [selectedMessage, setSelectedMessage] = useState<DecryptedMessage | null>(null);
-  const [showExtendedPicker, setShowExtendedPicker] = useState<boolean>(false);
-  const [customEmojiInput, setCustomEmojiInput] = useState<string>('');
+  // Multi-select & Single-select state (Activated ONLY on holding a message)
+  const [selectedMessageIds, setSelectedMessageIds] = useState<Set<string>>(new Set());
+  const [showEmojiDrawer, setShowEmojiDrawer] = useState<boolean>(false);
+
+  // Live peer profile state for instant real-time sync when other user updates name/photo
+  const [liveOtherUser, setLiveOtherUser] = useState<UserProfile | null>(null);
 
   // Modals & Panels
   const [showSafetyModal, setShowSafetyModal] = useState(false);
@@ -64,7 +98,6 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({ onBack }) => {
   const [isVerified, setIsVerified] = useState(false);
 
   const [showOptionsMenu, setShowOptionsMenu] = useState(false);
-  const [showTimerMenu, setShowTimerMenu] = useState(false);
   const [selectedImageFull, setSelectedImageFull] = useState<string | null>(null);
   const [copiedLinkNotice, setCopiedLinkNotice] = useState(false);
   const [copiedNotice, setCopiedNotice] = useState<string | null>(null);
@@ -75,6 +108,7 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({ onBack }) => {
   const longPressTimerRef = useRef<any>(null);
   const touchStartRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
   const isHoldingRef = useRef<boolean>(false);
+  const suppressClickUntilRef = useRef<number>(0);
   const [swipeOffsets, setSwipeOffsets] = useState<Record<string, number>>({});
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -89,6 +123,7 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({ onBack }) => {
   const recordingTimerRef = useRef<any>(null);
   const audioStreamRef = useRef<MediaStream | null>(null);
 
+  // Clean up timers & media stream on unmount
   useEffect(() => {
     return () => {
       if (recordingTimerRef.current) clearInterval(recordingTimerRef.current);
@@ -101,37 +136,63 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({ onBack }) => {
     };
   }, []);
 
-  // Auto-scroll to latest message on change
+  // Auto-scroll to latest message
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
+
+  // Real-time peer profile listener so other user's changes (name, photo, bio) update live instantly
+  useEffect(() => {
+    if (!user || !selectedConversation) return;
+    const otherUid = selectedConversation.participants.find((p) => p !== user.uid);
+    if (!otherUid) return;
+
+    const unsub = onSnapshot(
+      doc(db, 'public_profiles', otherUid),
+      (snap) => {
+        if (snap.exists()) {
+          const freshProfile = snap.data() as UserProfile;
+          setLiveOtherUser(freshProfile);
+          saveLocalProfile(freshProfile).catch(() => {});
+        }
+      },
+      (err) => {
+        console.warn('Notice listening to peer profile in room:', err);
+      }
+    );
+
+    return () => unsub();
+  }, [user, selectedConversation?.id]);
 
   // Load Safety Fingerprint
   useEffect(() => {
     if (!profile || !selectedConversation?.otherUser) return;
 
     const loadSafety = async () => {
-      const otherPubKey = selectedConversation.otherUser!.publicKey || profile.publicKey;
+      const activeOther = liveOtherUser || selectedConversation.otherUser;
+      const otherPubKey = activeOther?.publicKey || profile.publicKey;
       const fingerprint = await generateSafetyNumber(profile.publicKey, otherPubKey);
       setSafetyFingerprint(fingerprint);
 
-      const stored = await getSafetyNumber(selectedConversation.otherUser!.uid);
-      if (stored) {
-        setIsVerified(stored.verified);
+      if (activeOther?.uid) {
+        const stored = await getSafetyNumber(activeOther.uid);
+        if (stored) {
+          setIsVerified(stored.verified);
+        }
       }
     };
 
     loadSafety();
-  }, [profile, selectedConversation]);
+  }, [profile, selectedConversation, liveOtherUser]);
 
   // Early return placeholder if no chat selected (MUST be after all hooks!)
   if (!selectedConversation) {
     return (
-      <div className="flex-1 h-full flex flex-col items-center justify-center p-8 text-center bg-[#0b141a] text-[#8696a0]">
+      <div className="flex-1 h-full flex flex-col items-center justify-center p-8 text-center bg-[#0b141a] text-[#8696a0] w-full max-w-full overflow-hidden select-none">
         <div className="w-16 h-16 rounded-full bg-[#202c33] text-[#00a884] flex items-center justify-center mb-4 border border-[#2a3942] shadow-md">
           <Lock className="w-8 h-8" />
         </div>
-        <h3 className="text-base font-bold text-[#e9edef] mb-1.5">WhatsApp-grade E2EE Messaging</h3>
+        <h3 className="text-base font-bold text-[#e9edef] mb-1.5">Aegis Encrypted Messaging</h3>
         <p className="text-xs text-[#8696a0] max-w-sm leading-relaxed">
           Select a chat from your messages list or search contacts to begin an end-to-end encrypted session.
         </p>
@@ -141,13 +202,44 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({ onBack }) => {
 
   const otherUid = selectedConversation.participants.find((p) => p !== user?.uid) || '';
   const fallbackUsername = otherUid.startsWith('usr_') ? otherUid.split('_')[1] : 'user';
-  const otherUser: UserProfile = selectedConversation.otherUser || {
+  const otherUser: UserProfile = liveOtherUser || selectedConversation.otherUser || {
     uid: otherUid,
     username: fallbackUsername,
     fullName: fallbackUsername,
     accountType: 'public',
     publicKey: '',
     createdAt: new Date().toISOString(),
+  };
+
+  const isSelectMode = selectedMessageIds.size > 0;
+  const isSingleSelect = selectedMessageIds.size === 1;
+  const singleSelectedMsg = isSingleSelect
+    ? messages.find((m) => selectedMessageIds.has(m.id)) || null
+    : null;
+
+  const toggleSelectMessage = (msgId: string) => {
+    setSelectedMessageIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(msgId)) {
+        next.delete(msgId);
+      } else {
+        next.add(msgId);
+      }
+      return next;
+    });
+    setShowEmojiDrawer(false);
+  };
+
+  const clearSelection = () => {
+    setSelectedMessageIds(new Set());
+    setShowEmojiDrawer(false);
+  };
+
+  const handleDeleteSelected = async () => {
+    if (selectedMessageIds.size === 0) return;
+    const ids = Array.from(selectedMessageIds);
+    clearSelection();
+    await deleteMessagesLocally(ids);
   };
 
   const handleSendText = async (e?: React.FormEvent) => {
@@ -302,7 +394,7 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({ onBack }) => {
     }
   };
 
-  // Touch handlers for holding (long press) to select message
+  // Touch handlers for holding (long press 320ms) to select message
   const handleTouchStart = (m: DecryptedMessage, e: React.TouchEvent) => {
     touchStartRef.current = {
       x: e.touches[0].clientX,
@@ -311,42 +403,58 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({ onBack }) => {
     isHoldingRef.current = false;
     if (longPressTimerRef.current) {
       clearTimeout(longPressTimerRef.current);
+      longPressTimerRef.current = null;
     }
+
     longPressTimerRef.current = setTimeout(() => {
       isHoldingRef.current = true;
-      setSelectedMessage(m);
-      setShowExtendedPicker(false);
+      suppressClickUntilRef.current = Date.now() + 650;
+      setSelectedMessageIds((prev) => {
+        const next = new Set(prev);
+        next.add(m.id);
+        return next;
+      });
+      setShowEmojiDrawer(false);
       try {
-        if ('vibrate' in navigator) navigator.vibrate(35);
-      } catch (e) {}
-    }, 400);
+        if ('vibrate' in navigator) navigator.vibrate(40);
+      } catch (err) {}
+    }, 320);
   };
 
   const handleTouchMove = (msgId: string, e: React.TouchEvent) => {
     const diffX = e.touches[0].clientX - touchStartRef.current.x;
     const diffY = Math.abs(e.touches[0].clientY - touchStartRef.current.y);
 
-    if (Math.abs(diffX) > 10 || diffY > 10) {
+    // Only cancel long press if finger moved significantly (allow minor micro-jitter up to 18px)
+    if (Math.abs(diffX) > 18 || diffY > 18) {
       if (longPressTimerRef.current) {
         clearTimeout(longPressTimerRef.current);
         longPressTimerRef.current = null;
       }
     }
 
-    if (diffX > 0 && diffX > diffY && !isHoldingRef.current) {
+    if (diffX > 0 && diffX > diffY && !isHoldingRef.current && selectedMessageIds.size === 0) {
       const offset = Math.min(diffX * 0.6, 65);
       setSwipeOffsets((prev) => ({ ...prev, [msgId]: offset }));
     }
   };
 
-  const handleTouchEnd = (m: DecryptedMessage) => {
+  const handleTouchEnd = (m: DecryptedMessage, e: React.TouchEvent) => {
     if (longPressTimerRef.current) {
       clearTimeout(longPressTimerRef.current);
       longPressTimerRef.current = null;
     }
 
+    // If a long press was triggered, suppress the subsequent click event!
+    if (Date.now() < suppressClickUntilRef.current) {
+      if (e.cancelable) {
+        e.preventDefault();
+      }
+      return;
+    }
+
     const offset = swipeOffsets[m.id] || 0;
-    if (offset >= 35 && !isHoldingRef.current) {
+    if (offset >= 35 && !isHoldingRef.current && selectedMessageIds.size === 0) {
       setReplyingTo(m);
     }
     setSwipeOffsets((prev) => {
@@ -356,14 +464,23 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({ onBack }) => {
     });
   };
 
-  // Desktop mouse handlers for holding (mouse hold 400ms)
+  // Desktop mouse handlers for holding (mouse hold 320ms)
   const handleMouseDown = (m: DecryptedMessage, e: React.MouseEvent) => {
     if (e.button === 0) {
-      if (longPressTimerRef.current) clearTimeout(longPressTimerRef.current);
+      if (longPressTimerRef.current) {
+        clearTimeout(longPressTimerRef.current);
+        longPressTimerRef.current = null;
+      }
       longPressTimerRef.current = setTimeout(() => {
-        setSelectedMessage(m);
-        setShowExtendedPicker(false);
-      }, 400);
+        isHoldingRef.current = true;
+        suppressClickUntilRef.current = Date.now() + 650;
+        setSelectedMessageIds((prev) => {
+          const next = new Set(prev);
+          next.add(m.id);
+          return next;
+        });
+        setShowEmojiDrawer(false);
+      }, 320);
     }
   };
 
@@ -371,6 +488,21 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({ onBack }) => {
     if (longPressTimerRef.current) {
       clearTimeout(longPressTimerRef.current);
       longPressTimerRef.current = null;
+    }
+  };
+
+  const handleMessageBubbleClick = (m: DecryptedMessage, e: React.MouseEvent) => {
+    // If the click event is fired immediately after releasing a hold/long-press, SUPPRESS IT!
+    if (Date.now() < suppressClickUntilRef.current) {
+      e.preventDefault();
+      e.stopPropagation();
+      return;
+    }
+
+    // In select mode, a deliberate tap toggles selection
+    if (selectedMessageIds.size > 0) {
+      e.stopPropagation();
+      toggleSelectMessage(m.id);
     }
   };
 
@@ -414,80 +546,88 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({ onBack }) => {
     }
   };
 
-  const activeDisappearingTimer = selectedConversation.localEphemeralSetting || selectedConversation.ephemeralSetting || 'off';
-
   return (
     <div
       onClick={() => {
-        if (selectedMessage) {
-          setSelectedMessage(null);
-          setShowExtendedPicker(false);
+        if (showEmojiDrawer) {
+          setShowEmojiDrawer(false);
         }
       }}
-      className="flex-1 flex flex-col h-full bg-[#0b141a] relative overflow-hidden select-none"
+      className="flex-1 flex flex-col h-full bg-[#0b141a] relative w-full max-w-full overflow-hidden select-none"
     >
       {/* Top Header / Contextual Selection Bar (WhatsApp-style) */}
-      {selectedMessage ? (
+      {isSelectMode ? (
         <div
           onClick={(e) => e.stopPropagation()}
-          className="px-4 py-2.5 bg-[#202c33] border-b border-[#2a3942] flex items-center justify-between shrink-0 z-30 shadow-md animate-in fade-in duration-150"
+          className="px-3 sm:px-4 py-2.5 bg-[#202c33] border-b border-[#2a3942] flex items-center justify-between shrink-0 z-30 shadow-md w-full max-w-full min-w-0 animate-in fade-in duration-150"
         >
-          <div className="flex items-center space-x-3">
+          <div className="flex items-center space-x-3 min-w-0">
             <button
-              onClick={() => {
-                setSelectedMessage(null);
-                setShowExtendedPicker(false);
-              }}
-              className="p-1.5 text-[#8696a0] hover:text-[#e9edef] rounded-lg transition-colors"
+              onClick={clearSelection}
+              className="p-1.5 text-[#8696a0] hover:text-[#e9edef] rounded-lg transition-colors shrink-0"
               title="Close selection"
             >
               <X className="w-5 h-5" />
             </button>
-            <span className="text-sm font-semibold text-[#e9edef]">1 selected</span>
+            <span className="text-sm font-semibold text-[#e9edef] truncate">
+              {selectedMessageIds.size} selected
+            </span>
           </div>
 
-          <div className="flex items-center space-x-2 text-[#8696a0]">
-            {/* React Button: toggles emoji picker */}
-            <button
-              onClick={() => setShowExtendedPicker(!showExtendedPicker)}
-              className="p-2 hover:text-[#00a884] hover:bg-[#2a3942] rounded-xl transition-colors flex items-center space-x-1"
-              title="React with emoji"
-            >
-              <Smile className="w-5 h-5" />
-            </button>
+          <div className="flex items-center space-x-1.5 sm:space-x-2 text-[#8696a0] shrink-0">
+            {/* When SINGLE message is selected: React, Reply, Copy, and Delete */}
+            {isSingleSelect && singleSelectedMsg && (
+              <>
+                {/* React Button: toggles emoji picker */}
+                <button
+                  onClick={() => setShowEmojiDrawer(!showEmojiDrawer)}
+                  className="p-2 hover:text-[#00a884] hover:bg-[#2a3942] rounded-xl transition-colors"
+                  title="React with emoji"
+                >
+                  <Smile className="w-5 h-5" />
+                </button>
 
-            {/* Reply Button */}
-            <button
-              onClick={() => {
-                setReplyingTo(selectedMessage);
-                setSelectedMessage(null);
-                setShowExtendedPicker(false);
-              }}
-              className="p-2 hover:text-[#00a884] hover:bg-[#2a3942] rounded-xl transition-colors flex items-center space-x-1"
-              title="Reply"
-            >
-              <CornerDownRight className="w-5 h-5" />
-            </button>
+                {/* Reply Button */}
+                <button
+                  onClick={() => {
+                    setReplyingTo(singleSelectedMsg);
+                    clearSelection();
+                  }}
+                  className="p-2 hover:text-[#00a884] hover:bg-[#2a3942] rounded-xl transition-colors"
+                  title="Reply"
+                >
+                  <CornerDownRight className="w-5 h-5" />
+                </button>
 
-            {/* Copy Button */}
-            {selectedMessage.content.text && (
-              <button
-                onClick={() => {
-                  handleCopyText(selectedMessage.content.text);
-                  setSelectedMessage(null);
-                  setShowExtendedPicker(false);
-                }}
-                className="p-2 hover:text-[#00a884] hover:bg-[#2a3942] rounded-xl transition-colors flex items-center space-x-1"
-                title="Copy text"
-              >
-                <Copy className="w-5 h-5" />
-              </button>
+                {/* Copy Button */}
+                {singleSelectedMsg.content.text && (
+                  <button
+                    onClick={() => {
+                      handleCopyText(singleSelectedMsg.content.text);
+                      clearSelection();
+                    }}
+                    className="p-2 hover:text-[#00a884] hover:bg-[#2a3942] rounded-xl transition-colors"
+                    title="Copy text"
+                  >
+                    <Copy className="w-5 h-5" />
+                  </button>
+                )}
+              </>
             )}
+
+            {/* DELETE Button (Beside copy button, available for both single and multi-select!) */}
+            <button
+              onClick={handleDeleteSelected}
+              className="p-2 text-[#8696a0] hover:text-rose-400 hover:bg-[#2a3942] rounded-xl transition-colors"
+              title={isSingleSelect ? 'Delete message (for me)' : `Delete ${selectedMessageIds.size} messages (for me)`}
+            >
+              <Trash2 className="w-5 h-5" />
+            </button>
           </div>
         </div>
       ) : (
-        <div className="px-4 py-2.5 bg-[#202c33] border-b border-[#2a3942] flex items-center justify-between shrink-0 z-20">
-          <div className="flex items-center space-x-3 min-w-0">
+        <div className="px-3 sm:px-4 py-2 bg-[#202c33] border-b border-[#2a3942] flex items-center justify-between shrink-0 z-20 w-full max-w-full min-w-0">
+          <div className="flex items-center space-x-2.5 sm:space-x-3 min-w-0 flex-1">
             {onBack && (
               <button
                 onClick={onBack}
@@ -499,7 +639,7 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({ onBack }) => {
             )}
 
             <div
-              className="flex items-center space-x-3 cursor-pointer min-w-0"
+              className="flex items-center space-x-2.5 sm:space-x-3 cursor-pointer min-w-0 flex-1"
               onClick={() => setShowSafetyModal(true)}
             >
               <div className="relative shrink-0">
@@ -507,19 +647,19 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({ onBack }) => {
                   <img
                     src={otherUser.photoURL}
                     alt={otherUser.fullName}
-                    className="w-10 h-10 rounded-full object-cover border border-[#2a3942]"
+                    className="w-9 h-9 sm:w-10 sm:h-10 rounded-full object-cover border border-[#2a3942]"
                   />
                 ) : (
-                  <div className="w-10 h-10 rounded-full bg-[#111b21] text-[#e9edef] border border-[#2a3942] flex items-center justify-center font-bold text-xs select-none">
+                  <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-full bg-[#111b21] text-[#e9edef] border border-[#2a3942] flex items-center justify-center font-bold text-xs select-none">
                     {otherInitials}
                   </div>
                 )}
                 <span className="absolute bottom-0 right-0 w-2.5 h-2.5 rounded-full bg-[#00a884] ring-2 ring-[#202c33]" />
               </div>
 
-              <div className="min-w-0">
+              <div className="min-w-0 flex-1">
                 <div className="flex items-center space-x-1.5 truncate">
-                  <h3 className="font-semibold text-sm text-[#e9edef] truncate">
+                  <h3 className="font-semibold text-xs sm:text-sm text-[#e9edef] truncate">
                     {otherUser.fullName}
                   </h3>
                   {isVerified && (
@@ -528,35 +668,21 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({ onBack }) => {
                     </span>
                   )}
                 </div>
-                <p className="text-[11px] text-[#8696a0] font-mono truncate flex items-center space-x-1">
-                  <span>@{otherUser.username}</span>
+                <p className="text-[10px] sm:text-[11px] text-[#8696a0] font-mono truncate flex items-center space-x-1">
+                  <span className="truncate">@{otherUser.username}</span>
                   <span>•</span>
-                  <span className="text-[#00a884]">end-to-end encrypted</span>
+                  <span className="text-[#00a884] shrink-0">E2EE</span>
                 </p>
               </div>
             </div>
           </div>
 
           {/* Top Right Action Icons */}
-          <div className="flex items-center space-x-1 text-[#8696a0] shrink-0">
-            {/* Disappearing Timer Button */}
-            <button
-              onClick={() => setShowTimerMenu(!showTimerMenu)}
-              className={`p-2 hover:text-[#e9edef] hover:bg-[#2a3942] rounded-xl transition-colors relative ${
-                activeDisappearingTimer !== 'off' ? 'text-[#00a884] font-bold' : ''
-              }`}
-              title={`Disappearing Timer: ${activeDisappearingTimer}`}
-            >
-              <Clock className="w-4 h-4" />
-              {activeDisappearingTimer !== 'off' && (
-                <span className="absolute top-1 right-1 w-2 h-2 rounded-full bg-[#00a884]" />
-              )}
-            </button>
-
+          <div className="flex items-center space-x-1 text-[#8696a0] shrink-0 ml-1">
             {/* Safety Number Shield Button */}
             <button
               onClick={() => setShowSafetyModal(true)}
-              className="p-2 hover:text-[#e9edef] hover:bg-[#2a3942] rounded-xl transition-colors"
+              className="p-1.5 sm:p-2 hover:text-[#e9edef] hover:bg-[#2a3942] rounded-xl transition-colors"
               title="Verify Safety Number"
             >
               <Shield className="w-4 h-4" />
@@ -565,46 +691,12 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({ onBack }) => {
             {/* Options Menu */}
             <button
               onClick={() => setShowOptionsMenu(!showOptionsMenu)}
-              className="p-2 hover:text-[#e9edef] hover:bg-[#2a3942] rounded-xl transition-colors"
+              className="p-1.5 sm:p-2 hover:text-[#e9edef] hover:bg-[#2a3942] rounded-xl transition-colors"
               title="Options"
             >
               <MoreVertical className="w-4 h-4" />
             </button>
           </div>
-        </div>
-      )}
-
-      {/* Disappearing Timer Menu Dropdown (WhatsApp-style) */}
-      {showTimerMenu && (
-        <div
-          onClick={(e) => e.stopPropagation()}
-          className="absolute top-14 right-10 z-40 bg-[#202c33] rounded-2xl shadow-2xl border border-[#2a3942] p-2 text-xs w-60 text-[#e9edef]"
-        >
-          <div className="px-2.5 py-1.5 border-b border-[#2a3942] mb-1">
-            <p className="font-bold text-[11px] uppercase tracking-wider text-[#00a884]">
-              Disappearing Messages
-            </p>
-            <p className="text-[10px] text-[#8696a0] leading-snug mt-0.5">
-              Messages disappear from this device after reading, without altering the other user's device.
-            </p>
-          </div>
-          {(['off', 'viewed', '1h', '24h', '7d'] as EphemeralSetting[]).map((timer) => (
-            <button
-              key={timer}
-              onClick={() => {
-                updateEphemeralSetting(timer);
-                setShowTimerMenu(false);
-              }}
-              className={`w-full text-left px-3 py-2 rounded-xl flex items-center justify-between transition-colors ${
-                activeDisappearingTimer === timer
-                  ? 'bg-[#00a884] text-white font-semibold'
-                  : 'hover:bg-[#2a3942] text-[#e9edef]'
-              }`}
-            >
-              <span>{timer === 'off' ? 'Off' : timer === 'viewed' ? 'After Reading (15s)' : timer}</span>
-              {activeDisappearingTimer === timer && <Check className="w-3.5 h-3.5" />}
-            </button>
-          ))}
         </div>
       )}
 
@@ -658,16 +750,6 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({ onBack }) => {
               <LinkIcon className="w-3.5 h-3.5" />
               <span>Copy Account Direct Link</span>
             </button>
-            <button
-              onClick={() => {
-                setShowOptionsMenu(false);
-                setShowTimerMenu(true);
-              }}
-              className="w-full text-left px-3 py-2 rounded-xl hover:bg-[#2a3942] flex items-center space-x-2 transition-colors"
-            >
-              <Clock className="w-3.5 h-3.5" />
-              <span>Disappearing messages</span>
-            </button>
           </div>
 
           <div className="pt-1">
@@ -686,19 +768,19 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({ onBack }) => {
       )}
 
       {copiedNotice && (
-        <div className="absolute top-16 left-1/2 -translate-x-1/2 z-40 px-3.5 py-1.5 bg-[#202c33] border border-[#2a3942] text-[#e9edef] text-xs rounded-xl shadow-2xl animate-in fade-in zoom-in-95">
+        <div className="absolute top-14 left-1/2 -translate-x-1/2 z-40 px-3.5 py-1.5 bg-[#202c33] border border-[#2a3942] text-[#e9edef] text-xs rounded-xl shadow-2xl animate-in fade-in zoom-in-95">
           {copiedNotice}
         </div>
       )}
 
-      {/* Main Messages Scroll Area (WhatsApp-grade Wallpaper & Layout) */}
-      <div className="flex-1 overflow-y-auto p-4 sm:p-5 space-y-3 min-h-0 bg-[#0b141a] bg-[radial-gradient(#182229_1px,transparent_1px)] [background-size:18px_18px]">
+      {/* Main Messages Scroll Area (WhatsApp-grade Wallpaper & Screen Fitting) */}
+      <div className="flex-1 overflow-y-auto overflow-x-hidden p-2.5 sm:p-4 space-y-2.5 min-h-0 w-full max-w-full bg-[#0b141a] bg-[radial-gradient(#182229_1px,transparent_1px)] [background-size:18px_18px]">
         {/* WhatsApp-style E2EE Notice Banner */}
-        <div className="text-center py-2">
-          <div className="inline-flex items-center space-x-2 px-3.5 py-2 bg-[#182229] border border-[#222e35] rounded-xl text-[11px] text-[#ffd279] shadow-sm max-w-md mx-auto text-center leading-relaxed">
-            <Lock className="w-3.5 h-3.5 text-[#ffd279] shrink-0" />
+        <div className="text-center py-1.5">
+          <div className="inline-flex items-center space-x-2 px-3 py-1.5 bg-[#182229] border border-[#222e35] rounded-xl text-[10px] sm:text-[11px] text-[#ffd279] shadow-xs max-w-sm mx-auto text-center leading-relaxed">
+            <Lock className="w-3 h-3 text-[#ffd279] shrink-0" />
             <span>
-              Messages to this chat are end-to-end encrypted. No one outside of this chat, not even Aegis or Firebase, can read them.
+              Messages to this chat are end-to-end encrypted. No one outside of this chat can read them.
             </span>
           </div>
         </div>
@@ -708,15 +790,15 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({ onBack }) => {
           const isSender = m.senderUid === user?.uid;
           const replyParent = m.replyToId ? messages.find((p) => p.id === m.replyToId) : null;
           const swipeOffset = swipeOffsets[m.id] || 0;
-          const isSelected = selectedMessage?.id === m.id;
+          const isSelected = selectedMessageIds.has(m.id);
 
           return (
             <div
               key={m.id}
-              className={`group relative flex flex-col ${isSender ? 'items-end' : 'items-start'} space-y-1`}
+              className={`group relative flex flex-col ${isSender ? 'items-end' : 'items-start'} space-y-1 w-full max-w-full`}
             >
               {/* Swipe to reply sliding indicator */}
-              {swipeOffset > 8 && (
+              {swipeOffset > 8 && !isSelectMode && (
                 <div
                   className="absolute left-2 top-1/2 -translate-y-1/2 w-8 h-8 rounded-full bg-[#202c33] border border-[#2a3942] text-[#00a884] flex items-center justify-center transition-all shadow-md z-10 pointer-events-none"
                   style={{
@@ -728,8 +810,8 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({ onBack }) => {
                 </div>
               )}
 
-              {/* Reaction Bar (Floating above bubble when message is selected) */}
-              {isSelected && (
+              {/* Reaction Bar (Floating above bubble ONLY when EXACTLY 1 message is selected) */}
+              {isSingleSelect && singleSelectedMsg?.id === m.id && (
                 <div
                   onClick={(e) => e.stopPropagation()}
                   className={`absolute -top-11 z-40 flex items-center space-x-1 p-1 bg-[#202c33] border border-[#2a3942] rounded-full shadow-2xl animate-in zoom-in-95 duration-150 backdrop-blur-md ${
@@ -741,8 +823,7 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({ onBack }) => {
                       key={emoji}
                       onClick={() => {
                         addMessageReaction(m.id, emoji);
-                        setSelectedMessage(null);
-                        setShowExtendedPicker(false);
+                        clearSelection();
                       }}
                       className="w-7 h-7 flex items-center justify-center text-sm hover:scale-130 active:scale-95 transition-transform rounded-full hover:bg-[#2a3942]"
                       title={`React ${emoji}`}
@@ -750,81 +831,42 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({ onBack }) => {
                       {emoji}
                     </button>
                   ))}
+
+                  {/* + Button: Opens WhatsApp-style Emoji-Only Sheet (NO text bar!) */}
                   <button
-                    onClick={() => setShowExtendedPicker(!showExtendedPicker)}
+                    onClick={() => setShowEmojiDrawer(!showEmojiDrawer)}
                     className="w-6 h-6 flex items-center justify-center text-xs font-bold text-[#8696a0] hover:text-[#e9edef] rounded-full hover:bg-[#2a3942]"
-                    title="More Emojis"
+                    title="All Emojis"
                   >
                     +
                   </button>
-
-                  {/* Extended Emoji Grid & Custom Emoji Input */}
-                  {showExtendedPicker && (
-                    <div className="absolute top-10 left-0 bg-[#202c33] border border-[#2a3942] p-2.5 rounded-2xl shadow-2xl space-y-2 w-64 z-50 animate-in fade-in zoom-in-95">
-                      <div className="grid grid-cols-6 gap-1">
-                        {EXTENDED_EMOJIS.map((extEmoji) => (
-                          <button
-                            key={extEmoji}
-                            onClick={() => {
-                              addMessageReaction(m.id, extEmoji);
-                              setSelectedMessage(null);
-                              setShowExtendedPicker(false);
-                            }}
-                            className="w-8 h-8 flex items-center justify-center text-sm hover:scale-125 transition-transform rounded-lg hover:bg-[#2a3942]"
-                          >
-                            {extEmoji}
-                          </button>
-                        ))}
-                      </div>
-
-                      {/* Custom Emoji Input */}
-                      <div className="flex items-center space-x-1.5 pt-1.5 border-t border-[#2a3942]">
-                        <input
-                          type="text"
-                          placeholder="Custom emoji..."
-                          maxLength={4}
-                          value={customEmojiInput}
-                          onChange={(e) => setCustomEmojiInput(e.target.value)}
-                          className="flex-1 px-2 py-1 bg-[#111b21] rounded-lg text-xs text-[#e9edef] border border-[#2a3942] focus:outline-none"
-                        />
-                        <button
-                          onClick={() => {
-                            if (customEmojiInput.trim()) {
-                              addMessageReaction(m.id, customEmojiInput.trim());
-                              setCustomEmojiInput('');
-                              setSelectedMessage(null);
-                              setShowExtendedPicker(false);
-                            }
-                          }}
-                          className="px-2.5 py-1 bg-[#00a884] text-white font-bold text-xs rounded-lg hover:bg-[#009272]"
-                        >
-                          React
-                        </button>
-                      </div>
-                    </div>
-                  )}
                 </div>
               )}
 
-              {/* Message Bubble Container (Trigger select ONLY on holding / long press) */}
+              {/* Message Bubble Container */}
               <div
+                onClick={(e) => handleMessageBubbleClick(m, e)}
                 onContextMenu={(e) => {
                   e.preventDefault();
                   e.stopPropagation();
-                  setSelectedMessage(m);
-                  setShowExtendedPicker(false);
+                  suppressClickUntilRef.current = Date.now() + 650;
+                  setSelectedMessageIds((prev) => {
+                    const next = new Set(prev);
+                    next.add(m.id);
+                    return next;
+                  });
                 }}
                 onMouseDown={(e) => handleMouseDown(m, e)}
                 onMouseUp={handleMouseUp}
                 onTouchStart={(e) => handleTouchStart(m, e)}
                 onTouchMove={(e) => handleTouchMove(m.id, e)}
-                onTouchEnd={() => handleTouchEnd(m)}
+                onTouchEnd={(e) => handleTouchEnd(m, e)}
                 style={{
                   transform: swipeOffset > 0 ? `translateX(${swipeOffset}px)` : undefined,
                   transition: swipeOffset === 0 ? 'transform 0.2s cubic-bezier(0.2, 0, 0, 1)' : undefined,
                 }}
-                className={`relative px-3.5 py-2 rounded-2xl text-[13px] shadow-sm max-w-[85%] sm:max-w-md transition-all ${
-                  isSelected ? 'ring-2 ring-[#00a884] brightness-110' : ''
+                className={`relative px-3 sm:px-3.5 py-1.5 sm:py-2 rounded-2xl text-[13px] shadow-xs max-w-[85%] sm:max-w-[75%] min-w-0 break-words transition-all cursor-pointer ${
+                  isSelected ? 'ring-2 ring-[#00a884] brightness-110 bg-[#025144]/60' : ''
                 } ${
                   isSender
                     ? 'bg-[#005c4b] text-[#e9edef] rounded-tr-xs border border-[#005c4b]/40'
@@ -851,15 +893,17 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({ onBack }) => {
 
                 {/* Attached Image */}
                 {m.content.imageBase64 && (
-                  <div className="relative mb-1.5 rounded-xl overflow-hidden group/img">
+                  <div className="relative mb-1 rounded-xl overflow-hidden group/img min-w-0">
                     <img
                       src={m.content.imageBase64}
                       alt={m.content.fileName || 'Attachment'}
                       onClick={(e) => {
-                        e.stopPropagation();
-                        setSelectedImageFull(m.content.imageBase64!);
+                        if (!isSelectMode) {
+                          e.stopPropagation();
+                          setSelectedImageFull(m.content.imageBase64!);
+                        }
                       }}
-                      className="max-h-64 rounded-xl object-cover hover:opacity-95 transition-opacity cursor-pointer border border-[#2a3942]"
+                      className="max-h-60 sm:max-h-64 w-full rounded-xl object-cover hover:opacity-95 transition-opacity cursor-pointer border border-[#2a3942]"
                     />
                     <button
                       type="button"
@@ -875,7 +919,7 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({ onBack }) => {
 
                 {/* Voice Audio Message Player (WhatsApp style) */}
                 {m.content.voiceAudioBase64 && (
-                  <div className="mb-0.5">
+                  <div className="mb-0.5 min-w-0">
                     <VoiceAudioPlayer
                       audioBase64={m.content.voiceAudioBase64}
                       durationSeconds={m.content.voiceDurationSeconds}
@@ -886,16 +930,13 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({ onBack }) => {
 
                 {/* Plaintext Content */}
                 {m.content.text && (
-                  <p className="whitespace-pre-wrap break-words leading-relaxed select-text pr-1">
+                  <p className="whitespace-pre-wrap break-words leading-relaxed select-text pr-1 min-w-0">
                     {m.content.text}
                   </p>
                 )}
 
-                {/* Footer: Timestamp, Ephemeral, Status checkmarks inside bubble corner */}
-                <div
-                  className="flex items-center justify-end space-x-1 mt-0.5 text-[10px] select-none text-[#8696a0]"
-                >
-                  {m.ephemeralType !== 'off' && <Clock className="w-2.5 h-2.5" />}
+                {/* Footer: Timestamp, Status checkmarks inside bubble corner */}
+                <div className="flex items-center justify-end space-x-1 mt-0.5 text-[10px] select-none text-[#8696a0]">
                   <span>{formatMsgTime(m.timestamp)}</span>
                   {isSender && (
                     <span>
@@ -941,12 +982,54 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({ onBack }) => {
         <div ref={messagesEndRef} />
       </div>
 
-      {/* Replying Banner */}
+      {/* Pure Emoji-Only Drawer (Strictly ONLY Emojis, No text bar, Same as WhatsApp!) */}
+      {showEmojiDrawer && singleSelectedMsg && (
+        <div
+          onClick={(e) => e.stopPropagation()}
+          className="absolute bottom-16 sm:bottom-18 left-2 right-2 sm:left-auto sm:right-6 sm:w-80 max-h-72 bg-[#202c33] border border-[#2a3942] rounded-2xl shadow-2xl z-50 flex flex-col overflow-hidden animate-in fade-in zoom-in-95"
+        >
+          <div className="px-3.5 py-2 border-b border-[#2a3942] flex items-center justify-between shrink-0">
+            <span className="text-xs font-semibold text-[#e9edef]">Select Emoji Reaction</span>
+            <button
+              onClick={() => setShowEmojiDrawer(false)}
+              className="p-1 text-[#8696a0] hover:text-[#e9edef] rounded-lg"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+
+          <div className="p-3 overflow-y-auto space-y-3 flex-1">
+            {FULL_EMOJI_CATEGORIES.map((cat) => (
+              <div key={cat.category} className="space-y-1.5">
+                <p className="text-[10px] font-bold text-[#8696a0] uppercase tracking-wider">
+                  {cat.category}
+                </p>
+                <div className="grid grid-cols-7 sm:grid-cols-8 gap-1">
+                  {cat.emojis.map((emoji) => (
+                    <button
+                      key={emoji}
+                      onClick={() => {
+                        addMessageReaction(singleSelectedMsg.id, emoji);
+                        clearSelection();
+                      }}
+                      className="w-8 h-8 flex items-center justify-center text-lg hover:scale-130 active:scale-95 transition-transform rounded-lg hover:bg-[#2a3942]"
+                    >
+                      {emoji}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Replying Citation Banner */}
       {replyingTo && (
-        <div className="px-4 py-2 bg-[#202c33] border-t border-[#2a3942] flex items-center justify-between z-20">
-          <div className="flex items-center space-x-2 text-xs truncate">
+        <div className="px-3 sm:px-4 py-2 bg-[#202c33] border-t border-[#2a3942] flex items-center justify-between z-20 w-full max-w-full min-w-0">
+          <div className="flex items-center space-x-2 text-xs truncate min-w-0 flex-1">
             <CornerDownRight className="w-4 h-4 text-[#00a884] shrink-0" />
-            <div className="truncate">
+            <div className="truncate min-w-0 flex-1">
               <span className="font-semibold text-[#00a884]">
                 Replying to {replyingTo.senderUid === user?.uid ? 'yourself' : otherUser.fullName}:
               </span>
@@ -957,7 +1040,7 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({ onBack }) => {
           </div>
           <button
             onClick={() => setReplyingTo(null)}
-            className="p-1 text-[#8696a0] hover:text-[#e9edef] rounded-lg"
+            className="p-1 text-[#8696a0] hover:text-[#e9edef] rounded-lg shrink-0 ml-2"
           >
             <X className="w-4 h-4" />
           </button>
@@ -966,27 +1049,27 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({ onBack }) => {
 
       {/* Send Error Notice */}
       {sendError && (
-        <div className="px-4 py-1.5 bg-rose-950/80 border-t border-rose-800 text-rose-300 text-xs flex items-center justify-between z-20">
-          <span>{sendError}</span>
-          <button onClick={() => setSendError(null)} className="p-1">
+        <div className="px-3 sm:px-4 py-1.5 bg-rose-950/80 border-t border-rose-800 text-rose-300 text-xs flex items-center justify-between z-20 w-full max-w-full min-w-0">
+          <span className="truncate">{sendError}</span>
+          <button onClick={() => setSendError(null)} className="p-1 shrink-0 ml-2">
             <X className="w-3.5 h-3.5" />
           </button>
         </div>
       )}
 
-      {/* Bottom Input Area (WhatsApp style) */}
+      {/* Bottom Input Area (WhatsApp style, 100% Responsive) */}
       {isRecording ? (
-        <div className="p-3 bg-[#202c33] border-t border-[#2a3942] flex items-center justify-between shrink-0 z-20 animate-in fade-in">
-          <div className="flex items-center space-x-3">
-            <div className="w-3.5 h-3.5 rounded-full bg-rose-500 animate-pulse shadow-sm" />
-            <div className="text-xs font-mono font-bold text-[#e9edef]">
+        <div className="p-2.5 sm:p-3 bg-[#202c33] border-t border-[#2a3942] flex items-center justify-between shrink-0 z-20 animate-in fade-in w-full max-w-full min-w-0">
+          <div className="flex items-center space-x-2.5 sm:space-x-3 min-w-0 truncate">
+            <div className="w-3 h-3 rounded-full bg-rose-500 animate-pulse shadow-sm shrink-0" />
+            <div className="text-xs font-mono font-bold text-[#e9edef] shrink-0">
               {Math.floor(recordingSeconds / 60)}:
               {recordingSeconds % 60 < 10 ? `0${recordingSeconds % 60}` : recordingSeconds % 60}
             </div>
-            <span className="text-xs text-[#8696a0] italic">Recording encrypted voice note...</span>
+            <span className="text-xs text-[#8696a0] italic truncate">Recording encrypted voice note...</span>
           </div>
 
-          <div className="flex items-center space-x-2 shrink-0">
+          <div className="flex items-center space-x-2 shrink-0 ml-2">
             {/* Cancel & Discard Button */}
             <button
               type="button"
@@ -1012,7 +1095,7 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({ onBack }) => {
       ) : (
         <form
           onSubmit={handleSendText}
-          className="p-2.5 sm:p-3 bg-[#202c33] border-t border-[#2a3942] flex items-center space-x-2 shrink-0 z-20"
+          className="p-2 sm:p-2.5 bg-[#202c33] border-t border-[#2a3942] flex items-center space-x-1.5 sm:space-x-2 shrink-0 z-20 w-full max-w-full min-w-0"
         >
           <input
             type="file"
@@ -1025,7 +1108,7 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({ onBack }) => {
           <button
             type="button"
             onClick={() => fileInputRef.current?.click()}
-            className="p-2.5 text-[#8696a0] hover:text-[#e9edef] hover:bg-[#2a3942] rounded-full transition-colors shrink-0"
+            className="p-2 text-[#8696a0] hover:text-[#e9edef] hover:bg-[#2a3942] rounded-full transition-colors shrink-0"
             title="Attach Encrypted Photo"
           >
             <Paperclip className="w-5 h-5" />
@@ -1037,7 +1120,7 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({ onBack }) => {
             value={textInput}
             onChange={(e) => setTextInput(e.target.value)}
             placeholder="Type a message..."
-            className="flex-1 px-4 py-2.5 bg-[#2a3942] rounded-2xl text-xs sm:text-sm text-[#e9edef] placeholder-[#8696a0] border-none focus:outline-none transition-colors"
+            className="flex-1 min-w-0 px-3.5 py-2.5 bg-[#2a3942] rounded-2xl text-xs sm:text-sm text-[#e9edef] placeholder-[#8696a0] border-none focus:outline-none transition-colors"
           />
 
           {textInput.trim() ? (

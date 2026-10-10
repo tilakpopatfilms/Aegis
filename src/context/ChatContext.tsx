@@ -67,6 +67,7 @@ interface ChatContextType {
   updateEphemeralSetting: (setting: EphemeralSetting) => Promise<void>;
   addMessageReaction: (messageId: string, emoji: string) => Promise<void>;
   deleteMessageLocally: (messageId: string) => Promise<void>;
+  deleteMessagesLocally: (messageIds: string[]) => Promise<void>;
   deleteConversationLocally: (conversationId: string) => Promise<void>;
   togglePinConversation: (conversationId: string) => Promise<boolean>;
   toggleMuteConversation: (conversationId: string) => Promise<void>;
@@ -270,18 +271,43 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     return () => unsubscribe();
   }, [user]);
 
-  // Periodic Local Ephemeral Purge (runs every 10 seconds)
+  // Real-time Peer Profile Listener for active chat so name/photo/bio changes reflect immediately
   useEffect(() => {
-    const interval = setInterval(async () => {
-      const purgedCount = await purgeExpiredLocalMessages();
-      if (purgedCount > 0 && selectedConversationRef.current) {
-        const updated = await getLocalMessages(selectedConversationRef.current.id);
-        setMessages(updated);
-      }
-    }, 10000);
+    if (!user || !selectedConversation) return;
+    const otherUid = selectedConversation.participants.find((p) => p !== user.uid);
+    if (!otherUid) return;
 
-    return () => clearInterval(interval);
-  }, []);
+    const unsub = onSnapshot(
+      doc(db, 'public_profiles', otherUid),
+      (snap) => {
+        if (snap.exists()) {
+          const updatedProfile = snap.data() as UserProfile;
+          saveLocalProfile(updatedProfile).catch(() => {});
+          setSelectedConversation((prev) => {
+            if (!prev || prev.id !== selectedConversation.id) return prev;
+            const updated = { ...prev, otherUser: updatedProfile };
+            saveLocalConversation(updated).catch(() => {});
+            return updated;
+          });
+          setConversations((prev) =>
+            prev.map((c) => {
+              if (c.participants.includes(otherUid)) {
+                const updated = { ...c, otherUser: updatedProfile };
+                saveLocalConversation(updated).catch(() => {});
+                return updated;
+              }
+              return c;
+            })
+          );
+        }
+      },
+      (err) => {
+        console.warn('Notice listening to peer profile:', err);
+      }
+    );
+
+    return () => unsub();
+  }, [user, selectedConversation?.id]);
 
   // 2. GLOBAL Real-time Inbound Message Listener (where recipientUid == current user)
   useEffect(() => {
@@ -536,25 +562,6 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     setSelectedConversation(targetConv);
     setLoadingMessages(true);
     const msgs = await getLocalMessages(targetConv.id);
-
-    // If local disappearing messages enabled for this user on this device, schedule disappear after reading
-    if (targetConv.localEphemeralSetting && targetConv.localEphemeralSetting !== 'off') {
-      const now = Date.now();
-      let timeoutMs = 24 * 3600 * 1000;
-      if (targetConv.localEphemeralSetting === 'viewed') timeoutMs = 15 * 1000;
-      else if (targetConv.localEphemeralSetting === '1h') timeoutMs = 3600 * 1000;
-      else if (targetConv.localEphemeralSetting === '24h') timeoutMs = 24 * 3600 * 1000;
-      else if (targetConv.localEphemeralSetting === '7d') timeoutMs = 7 * 86400 * 1000;
-
-      for (const m of msgs) {
-        if (!m.localDisappearAtTimestamp) {
-          m.readAtTimestamp = now;
-          m.localDisappearAtTimestamp = now + timeoutMs;
-          saveLocalMessage(m).catch(() => {});
-        }
-      }
-    }
-
     setMessages(msgs);
     setLoadingMessages(false);
 
@@ -709,6 +716,22 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     }
 
     if (!recipientPubKey) {
+      const cachedProf = await getLocalProfile(recipientUid);
+      if (cachedProf?.publicKey) recipientPubKey = cachedProf.publicKey;
+    }
+
+    if (!recipientPubKey) {
+      try {
+        const usernameSnap = await getDoc(doc(db, 'usernames', recipientUid));
+        if (usernameSnap.exists()) {
+          const mappedUid = usernameSnap.data().uid;
+          const pSnap = await getDoc(doc(db, 'public_profiles', mappedUid));
+          if (pSnap.exists()) recipientPubKey = pSnap.data().publicKey;
+        }
+      } catch (e) {}
+    }
+
+    if (!recipientPubKey) {
       throw new Error('Recipient identity key is not registered yet. Ask them to log in to activate messaging.');
     }
 
@@ -726,19 +749,17 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     const ciphertext = await encryptE2EEPayload(JSON.stringify(content), recipientPubKey, privKey);
     const msgId = `msg_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
     const nowIso = new Date().toISOString();
-    const expiresAtMs = calculateExpiresAt(selectedConversation.ephemeralSetting);
 
-    // 3. Save to local IndexedDB and update state immediately
+    // 3. Save to local IndexedDB and update state immediately (No auto delete!)
     const localMsg: DecryptedMessage = {
       id: msgId,
       conversationId: selectedConversation.id,
       senderUid: user.uid,
       recipientUid,
       content,
-      ephemeralType: selectedConversation.ephemeralSetting,
+      ephemeralType: 'off',
       status: 'sending',
       timestamp: nowIso,
-      expiresAtTimestamp: expiresAtMs,
       replyToId,
     };
 
@@ -845,6 +866,22 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     }
 
     if (!recipientPubKey) {
+      const cachedProf = await getLocalProfile(recipientUid);
+      if (cachedProf?.publicKey) recipientPubKey = cachedProf.publicKey;
+    }
+
+    if (!recipientPubKey) {
+      try {
+        const usernameSnap = await getDoc(doc(db, 'usernames', recipientUid));
+        if (usernameSnap.exists()) {
+          const mappedUid = usernameSnap.data().uid;
+          const pSnap = await getDoc(doc(db, 'public_profiles', mappedUid));
+          if (pSnap.exists()) recipientPubKey = pSnap.data().publicKey;
+        }
+      } catch (e) {}
+    }
+
+    if (!recipientPubKey) {
       throw new Error('Recipient identity key not found.');
     }
 
@@ -862,7 +899,6 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     const ciphertext = await encryptE2EEPayload(JSON.stringify(content), recipientPubKey, privKey);
     const msgId = `msg_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
     const nowIso = new Date().toISOString();
-    const expiresAtMs = calculateExpiresAt(selectedConversation.ephemeralSetting);
 
     const localMsg: DecryptedMessage = {
       id: msgId,
@@ -870,10 +906,9 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       senderUid: user.uid,
       recipientUid,
       content,
-      ephemeralType: selectedConversation.ephemeralSetting,
+      ephemeralType: 'off',
       status: 'sending',
       timestamp: nowIso,
-      expiresAtTimestamp: expiresAtMs,
     };
 
     await saveLocalMessage(localMsg);
@@ -976,6 +1011,22 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     }
 
     if (!recipientPubKey) {
+      const cachedProf = await getLocalProfile(recipientUid);
+      if (cachedProf?.publicKey) recipientPubKey = cachedProf.publicKey;
+    }
+
+    if (!recipientPubKey) {
+      try {
+        const usernameSnap = await getDoc(doc(db, 'usernames', recipientUid));
+        if (usernameSnap.exists()) {
+          const mappedUid = usernameSnap.data().uid;
+          const pSnap = await getDoc(doc(db, 'public_profiles', mappedUid));
+          if (pSnap.exists()) recipientPubKey = pSnap.data().publicKey;
+        }
+      } catch (e) {}
+    }
+
+    if (!recipientPubKey) {
       throw new Error('Recipient identity key not found.');
     }
 
@@ -1002,7 +1053,6 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     const ciphertext = await encryptE2EEPayload(JSON.stringify(content), recipientPubKey, privKey);
     const msgId = `msg_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
     const nowIso = new Date().toISOString();
-    const expiresAtMs = calculateExpiresAt(selectedConversation.ephemeralSetting);
 
     const localMsg: DecryptedMessage = {
       id: msgId,
@@ -1010,10 +1060,9 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       senderUid: user.uid,
       recipientUid,
       content,
-      ephemeralType: selectedConversation.ephemeralSetting,
+      ephemeralType: 'off',
       status: 'sending',
       timestamp: nowIso,
-      expiresAtTimestamp: expiresAtMs,
     };
 
     await saveLocalMessage(localMsg);
@@ -1195,10 +1244,36 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     }
   };
 
+  // Delete Messages Locally (From user's side only, support multi-select bulk delete)
+  const deleteMessagesLocally = async (messageIds: string[]): Promise<void> => {
+    if (!messageIds || messageIds.length === 0) return;
+    const idSet = new Set(messageIds);
+    for (const id of messageIds) {
+      await deleteLocalMessage(id);
+    }
+    setMessages((prev) => prev.filter((m) => !idSet.has(m.id)));
+
+    // Update conversation preview if needed
+    if (selectedConversation) {
+      const remaining = await getLocalMessages(selectedConversation.id);
+      const last = remaining[remaining.length - 1];
+      const previewText = last
+        ? (last.content.text || (last.content.voiceAudioBase64 ? '🎤 Voice message' : 'Photo'))
+        : '';
+      const updatedConv = {
+        ...selectedConversation,
+        lastMessageText: previewText,
+        lastMessageTime: last ? last.timestamp : selectedConversation.createdAt,
+      };
+      setSelectedConversation(updatedConv);
+      await saveLocalConversation(updatedConv);
+      setConversations((prev) => prev.map((c) => (c.id === updatedConv.id ? updatedConv : c)));
+    }
+  };
+
   // Delete Single Message Locally
   const deleteMessageLocally = async (messageId: string): Promise<void> => {
-    await deleteLocalMessage(messageId);
-    setMessages((prev) => prev.filter((m) => m.id !== messageId));
+    await deleteMessagesLocally([messageId]);
   };
 
   // Delete Conversation Locally (Protected: will NEVER come back on refresh or reload)
@@ -1274,6 +1349,7 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         updateEphemeralSetting,
         addMessageReaction,
         deleteMessageLocally,
+        deleteMessagesLocally,
         deleteConversationLocally,
         togglePinConversation,
         toggleMuteConversation,

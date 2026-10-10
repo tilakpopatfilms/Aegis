@@ -86,14 +86,7 @@ export async function saveLocalMessage(message: DecryptedMessage): Promise<void>
 export async function getLocalMessages(conversationId: string): Promise<DecryptedMessage[]> {
   const db = await getLocalDB();
   const all = await db.getAllFromIndex('messages', 'by-conversation', conversationId);
-  const now = Date.now();
-  const valid = all.filter((m) => {
-    if (m.localDisappearAtTimestamp && m.localDisappearAtTimestamp <= now) return false;
-    if (m.expiresAtTimestamp && m.expiresAtTimestamp <= now) return false;
-    return true;
-  });
-
-  return valid.sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+  return all.sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
 }
 
 export async function deleteLocalMessage(messageId: string): Promise<void> {
