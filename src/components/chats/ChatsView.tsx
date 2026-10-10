@@ -41,6 +41,10 @@ export const ChatsView: React.FC<ChatsViewProps> = ({ onOpenSearch }) => {
 
   const cleanQ = searchQuery.trim().toLowerCase();
   const filtered = conversations.filter((c) => {
+    const hasMessages = !!c.lastMessageText || !!c.lastMessageTime;
+    if (!hasMessages) return false;
+    if (c.otherUser?.username === 'contact') return false;
+
     const nameMatch = c.otherUser?.fullName ? c.otherUser.fullName.toLowerCase().includes(cleanQ) : false;
     const usernameMatch = c.otherUser?.username ? c.otherUser.username.toLowerCase().includes(cleanQ) : false;
     const textMatch = c.lastMessageText ? c.lastMessageText.toLowerCase().includes(cleanQ) : false;
@@ -88,8 +92,10 @@ export const ChatsView: React.FC<ChatsViewProps> = ({ onOpenSearch }) => {
 
   const renderConversationItem = (c: Conversation) => {
     const isSelected = selectedConversation?.id === c.id;
-    const name = c.otherUser?.fullName || `@${c.otherUser?.username || 'contact'}`;
-    const username = c.otherUser?.username || 'contact';
+    const otherUid = c.participants.find((p) => p !== profile?.uid) || '';
+    const fallbackUsername = otherUid.startsWith('usr_') ? otherUid.split('_')[1] : 'user';
+    const username = c.otherUser?.username || fallbackUsername;
+    const name = c.otherUser?.fullName || `@${username}`;
     const photo = c.otherUser?.photoURL;
     const hasCustomPhoto = photo && !photo.startsWith('data:image/svg+xml;utf8');
     const isSentByMe = c.lastSenderUid === profile?.uid;

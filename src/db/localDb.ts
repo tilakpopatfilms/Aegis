@@ -1,5 +1,5 @@
 import { openDB, DBSchema, IDBPDatabase } from 'idb';
-import { Conversation, DecryptedMessage, SafetyNumberInfo } from '../types';
+import { Conversation, DecryptedMessage, SafetyNumberInfo, UserProfile } from '../types';
 
 interface AegisDBSchema extends DBSchema {
   conversations: {
@@ -24,10 +24,14 @@ interface AegisDBSchema extends DBSchema {
     key: string;
     value: { id: string; deletedAt: string };
   };
+  profiles: {
+    key: string;
+    value: UserProfile;
+  };
 }
 
 const DB_NAME = 'AegisLocalDB';
-const DB_VERSION = 2;
+const DB_VERSION = 3;
 
 let dbPromise: Promise<IDBPDatabase<AegisDBSchema>> | null = null;
 
@@ -62,6 +66,11 @@ export function getLocalDB(): Promise<IDBPDatabase<AegisDBSchema>> {
         if (!db.objectStoreNames.contains('deletedConversations')) {
           db.createObjectStore('deletedConversations', { keyPath: 'id' });
         }
+
+        // User Profiles Cache Store (for 100% offline access)
+        if (!db.objectStoreNames.contains('profiles')) {
+          db.createObjectStore('profiles', { keyPath: 'uid' });
+        }
       },
     });
   }
@@ -78,7 +87,11 @@ export async function getLocalMessages(conversationId: string): Promise<Decrypte
   const db = await getLocalDB();
   const all = await db.getAllFromIndex('messages', 'by-conversation', conversationId);
   const now = Date.now();
-  const valid = all.filter((m) => !m.expiresAtTimestamp || m.expiresAtTimestamp > now);
+  const valid = all.filter((m) => {
+    if (m.localDisappearAtTimestamp && m.localDisappearAtTimestamp <= now) return false;
+    if (m.expiresAtTimestamp && m.expiresAtTimestamp <= now) return false;
+    return true;
+  });
 
   return valid.sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
 }
@@ -243,13 +256,58 @@ export async function purgeExpiredLocalMessages(): Promise<number> {
   let purgedCount = 0;
 
   for (const m of all) {
-    if (m.expiresAtTimestamp && m.expiresAtTimestamp <= now) {
+    if (m.localDisappearAtTimestamp && m.localDisappearAtTimestamp <= now) {
+      await db.delete('messages', m.id);
+      purgedCount++;
+    } else if (m.expiresAtTimestamp && m.expiresAtTimestamp <= now) {
       await db.delete('messages', m.id);
       purgedCount++;
     }
   }
 
   return purgedCount;
+}
+
+// Offline User Profiles Cache API
+export async function saveLocalProfile(profile: UserProfile): Promise<void> {
+  if (!profile || !profile.uid) return;
+  try {
+    localStorage.setItem(`aegis_profile_${profile.uid}`, JSON.stringify(profile));
+  } catch (e) {}
+
+  try {
+    const db = await getLocalDB();
+    await db.put('profiles', profile);
+  } catch (e) {
+    console.warn('saveLocalProfile notice:', e);
+  }
+}
+
+export async function getLocalProfile(uid: string): Promise<UserProfile | undefined> {
+  if (!uid) return undefined;
+  // 1. Try IndexedDB
+  try {
+    const db = await getLocalDB();
+    const found = await db.get('profiles', uid);
+    if (found) return found;
+  } catch (e) {}
+
+  // 2. Try localStorage synchronous fallback
+  try {
+    const raw = localStorage.getItem(`aegis_profile_${uid}`);
+    if (raw) return JSON.parse(raw);
+  } catch (e) {}
+
+  return undefined;
+}
+
+export async function getAllLocalProfiles(): Promise<UserProfile[]> {
+  try {
+    const db = await getLocalDB();
+    return await db.getAll('profiles');
+  } catch (e) {
+    return [];
+  }
 }
 
 // Wipe local storage on session destruction
@@ -260,5 +318,6 @@ export async function wipeLocalDatabase(): Promise<void> {
   await db.clear('keyStore');
   await db.clear('contacts');
   await db.clear('deletedConversations');
+  await db.clear('profiles');
   localStorage.removeItem('aegis_deleted_convs');
 }

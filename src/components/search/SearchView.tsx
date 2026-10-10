@@ -5,6 +5,7 @@ import { db } from '../../firebase';
 import { useAuth } from '../../context/AuthContext';
 import { useChat } from '../../context/ChatContext';
 import { UserProfile } from '../../types';
+import { saveLocalProfile } from '../../db/localDb';
 
 interface SearchViewProps {
   onSelectUser: (uid: string) => void;
@@ -55,6 +56,7 @@ export const SearchView: React.FC<SearchViewProps> = ({ onSelectUser, onOpenQR }
           data.fullName.toLowerCase().includes(cleaned)
         ) {
           matches.push(data);
+          saveLocalProfile(data).catch(() => {});
         }
       });
 

@@ -16,6 +16,7 @@ import QRCode from 'qrcode';
 import jsQR from 'jsqr';
 import { useAuth } from '../../context/AuthContext';
 import { useChat } from '../../context/ChatContext';
+import { saveLocalProfile } from '../../db/localDb';
 
 interface QRModalProps {
   isOpen: boolean;
@@ -39,7 +40,7 @@ export const QRModal: React.FC<QRModalProps> = ({ isOpen, onClose, onSuccessConn
   const animFrameIdRef = useRef<number | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
 
-  // Render My QR Code
+  // Render My QR Code (and cache locally for offline access)
   useEffect(() => {
     if (isOpen && activeTab === 'myQr' && profile && canvasRef.current) {
       const qrPayload = JSON.stringify({
@@ -56,6 +57,12 @@ export const QRModal: React.FC<QRModalProps> = ({ isOpen, onClose, onSuccessConn
           dark: '#000000',
           light: '#FFFFFF',
         },
+      }).then(() => {
+        try {
+          if (canvasRef.current) {
+            localStorage.setItem(`aegis_qr_${profile.uid}`, canvasRef.current.toDataURL());
+          }
+        } catch (e) {}
       }).catch((err) => console.error('QR Render Error:', err));
     }
   }, [isOpen, activeTab, profile]);
@@ -151,6 +158,16 @@ export const QRModal: React.FC<QRModalProps> = ({ isOpen, onClose, onSuccessConn
       if (data.protocol === 'aegis-v1' && data.uid) {
         if (data.uid === user?.uid) {
           throw new Error('This is your own QR code.');
+        }
+        if (data.username && data.publicKey) {
+          saveLocalProfile({
+            uid: data.uid,
+            username: data.username,
+            fullName: data.fullName || data.username,
+            accountType: 'public',
+            publicKey: data.publicKey,
+            createdAt: new Date().toISOString(),
+          }).catch(() => {});
         }
         await startOrGetConversation(data.uid);
         onSuccessConnect(data.uid);

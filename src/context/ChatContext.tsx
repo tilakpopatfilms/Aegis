@@ -35,6 +35,8 @@ import {
   getLocalConversation,
   getKeyStoreItem,
   saveKeyStoreItem,
+  saveLocalProfile,
+  getLocalProfile,
 } from '../db/localDb';
 import {
   encryptE2EEPayload,
@@ -119,26 +121,48 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     // Always load local conversations first for instant offline review
     const loadLocal = async () => {
       const localList = await getLocalConversations(user.uid);
-      setConversations(localList);
-      setLoadingConversations(false);
 
-      // Asynchronously ensure all conversations have peer profiles populated
-      const needsProfile = localList.filter((c) => !c.otherUser || !c.otherUser.fullName);
-      if (needsProfile.length > 0) {
-        for (const c of needsProfile) {
-          const otherUid = c.participants.find((p) => p !== user.uid);
-          if (otherUid) {
+      // Asynchronously ensure all conversations have peer profiles populated from local cache first
+      for (const c of localList) {
+        const otherUid = c.participants.find((p) => p !== user.uid);
+        if (otherUid && (!c.otherUser || !c.otherUser.fullName || c.otherUser.username === 'contact')) {
+          // 1. Check local IndexedDB / localStorage cache
+          const cachedProfile = await getLocalProfile(otherUid);
+          if (cachedProfile) {
+            c.otherUser = cachedProfile;
+            await saveLocalConversation(c, true);
+          } else {
+            // 2. Fallback to cloud if online
             try {
               const snap = await getDoc(doc(db, 'public_profiles', otherUid));
               if (snap.exists()) {
-                c.otherUser = snap.data() as UserProfile;
-                await saveLocalConversation(c);
+                const cloudProfile = snap.data() as UserProfile;
+                c.otherUser = cloudProfile;
+                await saveLocalProfile(cloudProfile);
+                await saveLocalConversation(c, true);
               }
             } catch (e) {}
           }
         }
-        setConversations([...localList]);
       }
+
+      // Clean up any empty ghost conversations that have no messages from local DB
+      for (const c of localList) {
+        const hasMessages = !!c.lastMessageText || !!c.lastMessageTime;
+        if (!hasMessages) {
+          await deleteLocalConversation(c.id);
+        }
+      }
+
+      // Filter out ghost conversations that have no messages or invalid contact placeholders
+      const validConvs = localList.filter((c) => {
+        const hasMessages = !!c.lastMessageText || !!c.lastMessageTime;
+        const isValidUsername = c.otherUser?.username && c.otherUser.username !== 'contact';
+        return hasMessages && isValidUsername;
+      });
+
+      setConversations(validConvs);
+      setLoadingConversations(false);
     };
 
     loadLocal();
@@ -163,20 +187,32 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
           const data = changeDoc.data() as Conversation;
           data.id = convId;
 
+          // Only sync cloud conversations that have messages or valid activity
+          if (!data.lastMessageText && !data.lastMessageTime) continue;
+
           // Resolve peer contact profile
           const otherUid = data.participants.find((p) => p !== user.uid);
           if (otherUid) {
+            // First check local offline profile cache
+            const cachedProfile = await getLocalProfile(otherUid);
+            if (cachedProfile) {
+              data.otherUser = cachedProfile;
+            }
+
             if (data.participantDetails && data.participantDetails[otherUid]) {
               const details = data.participantDetails[otherUid];
-              data.otherUser = {
-                uid: otherUid,
-                username: details.username || 'contact',
-                fullName: details.fullName || details.username || 'Contact',
-                photoURL: details.photoURL,
-                accountType: 'public',
-                publicKey: details.publicKey || '',
-                createdAt: data.createdAt || new Date().toISOString(),
-              };
+              if (!data.otherUser || data.otherUser.username === 'contact') {
+                data.otherUser = {
+                  uid: otherUid,
+                  username: details.username && details.username !== 'contact' ? details.username : (otherUid.startsWith('usr_') ? otherUid.split('_')[1] : 'user'),
+                  fullName: details.fullName || details.username || 'Contact',
+                  photoURL: details.photoURL,
+                  accountType: 'public',
+                  publicKey: details.publicKey || '',
+                  createdAt: data.createdAt || new Date().toISOString(),
+                };
+                if (data.otherUser) await saveLocalProfile(data.otherUser);
+              }
             }
 
             if (!data.otherUser || !data.otherUser.fullName) {
@@ -184,22 +220,11 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
                 const otherSnap = await getDoc(doc(db, 'public_profiles', otherUid));
                 if (otherSnap.exists()) {
                   data.otherUser = otherSnap.data() as UserProfile;
+                  await saveLocalProfile(data.otherUser);
                 }
               } catch (err) {
                 console.warn('Notice loading contact profile:', err);
               }
-            }
-
-            if (!data.otherUser) {
-              const usernameFromUid = otherUid.startsWith('usr_') ? otherUid.split('_')[1] : 'contact';
-              data.otherUser = {
-                uid: otherUid,
-                username: usernameFromUid,
-                fullName: usernameFromUid,
-                accountType: 'public',
-                publicKey: '',
-                createdAt: data.createdAt || new Date().toISOString(),
-              };
             }
           }
 
@@ -225,12 +250,15 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
             otherUser: c.otherUser || existing?.otherUser,
             isPinned: existing?.isPinned,
             isMuted: existing?.isMuted,
+            localEphemeralSetting: existing?.localEphemeralSetting || c.localEphemeralSetting,
           });
         });
 
-        const finalList = Array.from(mergedMap.values()).sort(
-          (a, b) => new Date(b.lastMessageTime || b.updatedAt || 0).getTime() - new Date(a.lastMessageTime || a.updatedAt || 0).getTime()
-        );
+        const finalList = Array.from(mergedMap.values())
+          .filter((c) => (!!c.lastMessageText || !!c.lastMessageTime) && c.otherUser?.username !== 'contact')
+          .sort(
+            (a, b) => new Date(b.lastMessageTime || b.updatedAt || 0).getTime() - new Date(a.lastMessageTime || a.updatedAt || 0).getTime()
+          );
 
         setConversations(finalList);
       },
@@ -290,11 +318,19 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
               const found = targetMsgs.find((m) => m.id === data.messageId);
               if (found) {
                 const reactions: Record<string, string[]> = { ...(found.reactions || {}) };
-                const currentList = reactions[data.emoji] || [];
                 if (data.action === 'remove') {
+                  const currentList = reactions[data.emoji] || [];
                   reactions[data.emoji] = currentList.filter((u) => u !== data.senderUid);
                   if (reactions[data.emoji].length === 0) delete reactions[data.emoji];
                 } else {
+                  // Single reaction constraint: remove sender from any other emoji on this message
+                  for (const [k, uids] of Object.entries(reactions)) {
+                    if (k !== data.emoji && uids.includes(data.senderUid)) {
+                      reactions[k] = uids.filter((u) => u !== data.senderUid);
+                      if (reactions[k].length === 0) delete reactions[k];
+                    }
+                  }
+                  const currentList = reactions[data.emoji] || [];
                   if (!currentList.includes(data.senderUid)) {
                     reactions[data.emoji] = [...currentList, data.senderUid];
                   }
@@ -500,6 +536,25 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     setSelectedConversation(targetConv);
     setLoadingMessages(true);
     const msgs = await getLocalMessages(targetConv.id);
+
+    // If local disappearing messages enabled for this user on this device, schedule disappear after reading
+    if (targetConv.localEphemeralSetting && targetConv.localEphemeralSetting !== 'off') {
+      const now = Date.now();
+      let timeoutMs = 24 * 3600 * 1000;
+      if (targetConv.localEphemeralSetting === 'viewed') timeoutMs = 15 * 1000;
+      else if (targetConv.localEphemeralSetting === '1h') timeoutMs = 3600 * 1000;
+      else if (targetConv.localEphemeralSetting === '24h') timeoutMs = 24 * 3600 * 1000;
+      else if (targetConv.localEphemeralSetting === '7d') timeoutMs = 7 * 86400 * 1000;
+
+      for (const m of msgs) {
+        if (!m.localDisappearAtTimestamp) {
+          m.readAtTimestamp = now;
+          m.localDisappearAtTimestamp = now + timeoutMs;
+          saveLocalMessage(m).catch(() => {});
+        }
+      }
+    }
+
     setMessages(msgs);
     setLoadingMessages(false);
 
@@ -516,17 +571,19 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     if (!user) throw new Error('Not authenticated.');
 
     const convId = getDeterministicConversationId(user.uid, otherUserUid);
-    // Unmark as deleted so it can never be suppressed if deleted previously
     await unmarkConversationAsDeleted(convId);
 
-    // Resolve peer contact profile
-    let otherUser: UserProfile | undefined = undefined;
-    try {
-      const otherProfileSnap = await getDoc(doc(db, 'public_profiles', otherUserUid));
-      if (otherProfileSnap.exists()) {
-        otherUser = otherProfileSnap.data() as UserProfile;
-      }
-    } catch (e) {}
+    // Resolve peer contact profile: check local IndexedDB first, then Firestore
+    let otherUser: UserProfile | undefined = await getLocalProfile(otherUserUid);
+    if (!otherUser) {
+      try {
+        const otherProfileSnap = await getDoc(doc(db, 'public_profiles', otherUserUid));
+        if (otherProfileSnap.exists()) {
+          otherUser = otherProfileSnap.data() as UserProfile;
+          await saveLocalProfile(otherUser);
+        }
+      } catch (e) {}
+    }
 
     // 1. Check existing in memory
     const existing = conversations.find((c) => c.id === convId || c.participants.includes(otherUserUid));
@@ -536,8 +593,7 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         id: convId,
         otherUser: otherUser || existing.otherUser,
       };
-      await saveLocalConversation(merged, true);
-      setConversations((prev) => [merged, ...prev.filter((c) => c.id !== convId)]);
+      if (otherUser) await saveLocalProfile(otherUser);
       await selectConversation(merged);
       return merged;
     }
@@ -549,13 +605,16 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         ...localExisting,
         otherUser: otherUser || localExisting.otherUser,
       };
-      await saveLocalConversation(merged, true);
-      setConversations((prev) => [merged, ...prev.filter((c) => c.id !== convId)]);
+      if (otherUser) await saveLocalProfile(otherUser);
       await selectConversation(merged);
       return merged;
     }
 
     const nowIso = new Date().toISOString();
+    const cleanUsername = otherUser?.username && otherUser.username !== 'contact'
+      ? otherUser.username
+      : (otherUserUid.startsWith('usr_') ? otherUserUid.split('_')[1] : 'user');
+
     const participantDetails: Record<string, Partial<UserProfile>> = {
       [user.uid]: {
         uid: user.uid,
@@ -566,8 +625,8 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       },
       [otherUserUid]: {
         uid: otherUserUid,
-        username: otherUser?.username || 'contact',
-        fullName: otherUser?.fullName || otherUser?.username || 'Contact',
+        username: cleanUsername,
+        fullName: otherUser?.fullName || cleanUsername,
         photoURL: otherUser?.photoURL || '',
         publicKey: otherUser?.publicKey || '',
       },
@@ -579,32 +638,24 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       ephemeralSetting: profile?.accountType === 'private' ? '24h' : 'off',
       createdAt: nowIso,
       updatedAt: nowIso,
-      otherUser,
+      otherUser: otherUser || {
+        uid: otherUserUid,
+        username: cleanUsername,
+        fullName: cleanUsername,
+        accountType: 'public',
+        publicKey: '',
+        createdAt: nowIso,
+      },
       participantDetails,
     };
 
-    // Save to Firestore with participant details
-    try {
-      await setDoc(
-        doc(db, 'conversations', convId),
-        {
-          id: convId,
-          participants: newConv.participants,
-          ephemeralSetting: newConv.ephemeralSetting,
-          participantDetails,
-          createdAt: nowIso,
-          updatedAt: nowIso,
-        },
-        { merge: true }
-      );
-    } catch (err) {
-      console.warn('Notice saving cloud conversation:', err);
+    if (otherUser) {
+      await saveLocalProfile(otherUser);
     }
 
-    await saveLocalConversation(newConv, true);
-    setConversations((prev) => [newConv, ...prev.filter((c) => c.id !== convId)]);
-    await selectConversation(newConv);
-
+    // Set as active conversation for user to chat; only persists to list when message sent
+    setSelectedConversation(newConv);
+    setMessages([]);
     return newConv;
   };
 
@@ -1020,13 +1071,14 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     }
   };
 
-  // Update Ephemeral Setting
+  // Update Ephemeral / Disappearing Messages Setting (Per-user on own device)
   const updateEphemeralSetting = async (setting: EphemeralSetting): Promise<void> => {
     if (!selectedConversation) return;
 
     const updated: Conversation = {
       ...selectedConversation,
       ephemeralSetting: setting,
+      localEphemeralSetting: setting,
       updatedAt: new Date().toISOString(),
     };
 
@@ -1034,34 +1086,60 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     await saveLocalConversation(updated, true);
     setConversations((prev) => prev.map((c) => (c.id === updated.id ? updated : c)));
 
-    try {
-      await updateDoc(doc(db, 'conversations', selectedConversation.id), {
-        ephemeralSetting: setting,
-        updatedAt: updated.updatedAt,
-      });
-    } catch (err) {
-      console.warn('Notice updating ephemeral setting in cloud:', err);
+    // Apply local countdown to messages on this device
+    if (setting !== 'off') {
+      const now = Date.now();
+      let timeoutMs = 24 * 3600 * 1000;
+      if (setting === 'viewed') timeoutMs = 15 * 1000;
+      else if (setting === '1h') timeoutMs = 3600 * 1000;
+      else if (setting === '24h') timeoutMs = 24 * 3600 * 1000;
+      else if (setting === '7d') timeoutMs = 7 * 86400 * 1000;
+
+      const updatedList = await Promise.all(
+        messages.map(async (m) => {
+          if (!m.localDisappearAtTimestamp) {
+            const mUpdated = {
+              ...m,
+              readAtTimestamp: now,
+              localDisappearAtTimestamp: now + timeoutMs,
+            };
+            await saveLocalMessage(mUpdated);
+            return mUpdated;
+          }
+          return m;
+        })
+      );
+      setMessages(updatedList);
     }
   };
 
-  // Add Message Reaction
+  // Add Message Reaction (Strictly single emoji per user)
   const addMessageReaction = async (messageId: string, emoji: string): Promise<void> => {
     if (!user) return;
     const msg = messages.find((m) => m.id === messageId);
     if (!msg) return;
 
     const currentReactions: Record<string, string[]> = { ...(msg.reactions || {}) };
-    const userList = currentReactions[emoji] || [];
     let isRemoving = false;
 
-    if (userList.includes(user.uid)) {
-      isRemoving = true;
-      currentReactions[emoji] = userList.filter((uid) => uid !== user.uid);
-      if (currentReactions[emoji].length === 0) {
-        delete currentReactions[emoji];
+    // Single reaction rule: check if user already reacted
+    for (const [key, uids] of Object.entries(currentReactions)) {
+      if (uids.includes(user.uid)) {
+        if (key === emoji) {
+          isRemoving = true;
+        }
+        const filtered = uids.filter((uid) => uid !== user.uid);
+        if (filtered.length === 0) {
+          delete currentReactions[key];
+        } else {
+          currentReactions[key] = filtered;
+        }
       }
-    } else {
-      currentReactions[emoji] = [...userList, user.uid];
+    }
+
+    if (!isRemoving) {
+      const currentList = currentReactions[emoji] || [];
+      currentReactions[emoji] = [...currentList, user.uid];
     }
 
     const updatedMsg: DecryptedMessage = { ...msg, reactions: currentReactions };

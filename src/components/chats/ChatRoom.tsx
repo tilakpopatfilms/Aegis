@@ -10,17 +10,16 @@ import {
   Check,
   CornerDownRight,
   MoreVertical,
-  Star,
   Copy,
   ArrowLeft,
   ShieldCheck,
   Link as LinkIcon,
-  AlertCircle,
   Download,
   Smile,
   Pin,
   VolumeX,
   Mic,
+  Lock,
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { useChat } from '../../context/ChatContext';
@@ -29,8 +28,8 @@ import { generateSafetyNumber } from '../../crypto/crypto';
 import { saveSafetyNumber, getSafetyNumber } from '../../db/localDb';
 import { VoiceAudioPlayer } from './VoiceAudioPlayer';
 
-const PRIMARY_EMOJIS = ['👍', '🥳', '🔥', '❤️', '😡', '🙂'];
-const EXTENDED_EMOJIS = ['😂', '🙏', '👏', '🎉', '💔', '👀', '🚀', '💯', '✨', '⚡', '😍', '🤔'];
+const PRIMARY_EMOJIS = ['👍', '❤️', '😂', '😮', '😢', '🙏'];
+const EXTENDED_EMOJIS = ['🔥', '🥳', '👏', '🎉', '💔', '👀', '🚀', '💯', '✨', '⚡', '😍', '🤔', '😡', '🙂', '🤝', '🙌', '💀', '🥰'];
 
 interface ChatRoomProps {
   onBack?: () => void;
@@ -45,7 +44,6 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({ onBack }) => {
     sendImageMessage,
     sendVoiceMessage,
     updateEphemeralSetting,
-    deleteMessageLocally,
     deleteConversationLocally,
     addMessageReaction,
     togglePinConversation,
@@ -55,6 +53,11 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({ onBack }) => {
   const [textInput, setTextInput] = useState('');
   const [replyingTo, setReplyingTo] = useState<DecryptedMessage | null>(null);
 
+  // Selected message state (activated ONLY upon holding a message)
+  const [selectedMessage, setSelectedMessage] = useState<DecryptedMessage | null>(null);
+  const [showExtendedPicker, setShowExtendedPicker] = useState<boolean>(false);
+  const [customEmojiInput, setCustomEmojiInput] = useState<string>('');
+
   // Modals & Panels
   const [showSafetyModal, setShowSafetyModal] = useState(false);
   const [safetyFingerprint, setSafetyFingerprint] = useState('');
@@ -63,21 +66,16 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({ onBack }) => {
   const [showOptionsMenu, setShowOptionsMenu] = useState(false);
   const [showTimerMenu, setShowTimerMenu] = useState(false);
   const [selectedImageFull, setSelectedImageFull] = useState<string | null>(null);
-  const [starredMsgIds, setStarredMsgIds] = useState<Set<string>>(new Set());
   const [copiedLinkNotice, setCopiedLinkNotice] = useState(false);
   const [copiedNotice, setCopiedNotice] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
 
-  // Reaction picker state
-  const [reactionPickerMsgId, setReactionPickerMsgId] = useState<string | null>(null);
-  const [showExtendedPicker, setShowExtendedPicker] = useState<boolean>(false);
-  const [customEmojiInput, setCustomEmojiInput] = useState<string>('');
+  // Hold / Long-press touch tracking
   const longPressTimerRef = useRef<any>(null);
-
-  // Swipe-to-reply touch tracking
-  const [swipeOffsets, setSwipeOffsets] = useState<Record<string, number>>({});
   const touchStartRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
+  const isHoldingRef = useRef<boolean>(false);
+  const [swipeOffsets, setSwipeOffsets] = useState<Record<string, number>>({});
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -96,6 +94,9 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({ onBack }) => {
       if (recordingTimerRef.current) clearInterval(recordingTimerRef.current);
       if (audioStreamRef.current) {
         audioStreamRef.current.getTracks().forEach((t) => t.stop());
+      }
+      if (longPressTimerRef.current) {
+        clearTimeout(longPressTimerRef.current);
       }
     };
   }, []);
@@ -123,25 +124,27 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({ onBack }) => {
     loadSafety();
   }, [profile, selectedConversation]);
 
+  // Early return placeholder if no chat selected (MUST be after all hooks!)
   if (!selectedConversation) {
     return (
-      <div className="flex-1 h-full flex flex-col items-center justify-center p-8 text-center bg-white dark:bg-[#0c0c0e] text-neutral-800 dark:text-neutral-200">
-        <div className="w-14 h-14 rounded-full bg-neutral-100 dark:bg-[#18181b] text-neutral-900 dark:text-white flex items-center justify-center mb-3 border border-neutral-200 dark:border-neutral-800">
-          <Shield className="w-7 h-7" />
+      <div className="flex-1 h-full flex flex-col items-center justify-center p-8 text-center bg-[#0b141a] text-[#8696a0]">
+        <div className="w-16 h-16 rounded-full bg-[#202c33] text-[#00a884] flex items-center justify-center mb-4 border border-[#2a3942] shadow-md">
+          <Lock className="w-8 h-8" />
         </div>
-        <h3 className="text-base font-bold mb-1">Aegis Encrypted Messaging</h3>
-        <p className="text-xs text-neutral-500 max-w-sm">
-          Select a chat from the sidebar or find contacts in the search directory to begin an end-to-end encrypted session.
+        <h3 className="text-base font-bold text-[#e9edef] mb-1.5">WhatsApp-grade E2EE Messaging</h3>
+        <p className="text-xs text-[#8696a0] max-w-sm leading-relaxed">
+          Select a chat from your messages list or search contacts to begin an end-to-end encrypted session.
         </p>
       </div>
     );
   }
 
   const otherUid = selectedConversation.participants.find((p) => p !== user?.uid) || '';
+  const fallbackUsername = otherUid.startsWith('usr_') ? otherUid.split('_')[1] : 'user';
   const otherUser: UserProfile = selectedConversation.otherUser || {
     uid: otherUid,
-    username: otherUid.replace(/^usr_/, '').split('_')[0] || 'contact',
-    fullName: otherUid.replace(/^usr_/, '').split('_')[0] || 'Encrypted Contact',
+    username: fallbackUsername,
+    fullName: fallbackUsername,
     accountType: 'public',
     publicKey: '',
     createdAt: new Date().toISOString(),
@@ -275,15 +278,6 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({ onBack }) => {
     mediaRecorderRef.current.stop();
   };
 
-  const handleToggleStar = (msgId: string) => {
-    setStarredMsgIds((prev) => {
-      const next = new Set(prev);
-      if (next.has(msgId)) next.delete(msgId);
-      else next.add(msgId);
-      return next;
-    });
-  };
-
   const handleCopyText = (text?: string) => {
     if (text) {
       navigator.clipboard.writeText(text);
@@ -308,17 +302,23 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({ onBack }) => {
     }
   };
 
-  const handleTouchStart = (msgId: string, e: React.TouchEvent) => {
+  // Touch handlers for holding (long press) to select message
+  const handleTouchStart = (m: DecryptedMessage, e: React.TouchEvent) => {
     touchStartRef.current = {
       x: e.touches[0].clientX,
       y: e.touches[0].clientY,
     };
+    isHoldingRef.current = false;
     if (longPressTimerRef.current) {
       clearTimeout(longPressTimerRef.current);
     }
     longPressTimerRef.current = setTimeout(() => {
-      setReactionPickerMsgId(msgId);
+      isHoldingRef.current = true;
+      setSelectedMessage(m);
       setShowExtendedPicker(false);
+      try {
+        if ('vibrate' in navigator) navigator.vibrate(35);
+      } catch (e) {}
     }, 400);
   };
 
@@ -333,7 +333,7 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({ onBack }) => {
       }
     }
 
-    if (diffX > 0 && diffX > diffY) {
+    if (diffX > 0 && diffX > diffY && !isHoldingRef.current) {
       const offset = Math.min(diffX * 0.6, 65);
       setSwipeOffsets((prev) => ({ ...prev, [msgId]: offset }));
     }
@@ -346,7 +346,7 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({ onBack }) => {
     }
 
     const offset = swipeOffsets[m.id] || 0;
-    if (offset >= 35) {
+    if (offset >= 35 && !isHoldingRef.current) {
       setReplyingTo(m);
     }
     setSwipeOffsets((prev) => {
@@ -354,6 +354,24 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({ onBack }) => {
       delete next[m.id];
       return next;
     });
+  };
+
+  // Desktop mouse handlers for holding (mouse hold 400ms)
+  const handleMouseDown = (m: DecryptedMessage, e: React.MouseEvent) => {
+    if (e.button === 0) {
+      if (longPressTimerRef.current) clearTimeout(longPressTimerRef.current);
+      longPressTimerRef.current = setTimeout(() => {
+        setSelectedMessage(m);
+        setShowExtendedPicker(false);
+      }, 400);
+    }
+  };
+
+  const handleMouseUp = () => {
+    if (longPressTimerRef.current) {
+      clearTimeout(longPressTimerRef.current);
+      longPressTimerRef.current = null;
+    }
   };
 
   const handleCopyContactLink = () => {
@@ -396,85 +414,180 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({ onBack }) => {
     }
   };
 
+  const activeDisappearingTimer = selectedConversation.localEphemeralSetting || selectedConversation.ephemeralSetting || 'off';
+
   return (
-    <div className="flex-1 flex flex-col h-full bg-[#fbfbfb] dark:bg-[#0c0c0e] relative overflow-hidden select-none">
-      {/* Top Header */}
-      <div className="px-4 py-2.5 bg-white dark:bg-[#121215] border-b border-neutral-200 dark:border-neutral-800 flex items-center justify-between shrink-0 z-20">
-        <div className="flex items-center space-x-3 min-w-0">
-          {onBack && (
+    <div
+      onClick={() => {
+        if (selectedMessage) {
+          setSelectedMessage(null);
+          setShowExtendedPicker(false);
+        }
+      }}
+      className="flex-1 flex flex-col h-full bg-[#0b141a] relative overflow-hidden select-none"
+    >
+      {/* Top Header / Contextual Selection Bar (WhatsApp-style) */}
+      {selectedMessage ? (
+        <div
+          onClick={(e) => e.stopPropagation()}
+          className="px-4 py-2.5 bg-[#202c33] border-b border-[#2a3942] flex items-center justify-between shrink-0 z-30 shadow-md animate-in fade-in duration-150"
+        >
+          <div className="flex items-center space-x-3">
             <button
-              onClick={onBack}
-              className="p-1.5 text-neutral-600 dark:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-800 rounded-lg md:hidden shrink-0"
-              title="Back"
+              onClick={() => {
+                setSelectedMessage(null);
+                setShowExtendedPicker(false);
+              }}
+              className="p-1.5 text-[#8696a0] hover:text-[#e9edef] rounded-lg transition-colors"
+              title="Close selection"
             >
-              <ArrowLeft className="w-4 h-4" />
+              <X className="w-5 h-5" />
             </button>
-          )}
+            <span className="text-sm font-semibold text-[#e9edef]">1 selected</span>
+          </div>
 
-          <div
-            className="flex items-center space-x-3 cursor-pointer min-w-0"
-            onClick={() => setShowSafetyModal(true)}
-          >
-            {hasOtherPhoto ? (
-              <img
-                src={otherUser.photoURL}
-                alt={otherUser.fullName}
-                className="w-10 h-10 rounded-full object-cover border border-neutral-300 dark:border-neutral-700 shrink-0"
-              />
-            ) : (
-              <div className="w-10 h-10 rounded-full bg-neutral-900 dark:bg-white text-white dark:text-neutral-900 flex items-center justify-center font-bold text-xs select-none shrink-0">
-                {otherInitials}
-              </div>
+          <div className="flex items-center space-x-2 text-[#8696a0]">
+            {/* React Button: toggles emoji picker */}
+            <button
+              onClick={() => setShowExtendedPicker(!showExtendedPicker)}
+              className="p-2 hover:text-[#00a884] hover:bg-[#2a3942] rounded-xl transition-colors flex items-center space-x-1"
+              title="React with emoji"
+            >
+              <Smile className="w-5 h-5" />
+            </button>
+
+            {/* Reply Button */}
+            <button
+              onClick={() => {
+                setReplyingTo(selectedMessage);
+                setSelectedMessage(null);
+                setShowExtendedPicker(false);
+              }}
+              className="p-2 hover:text-[#00a884] hover:bg-[#2a3942] rounded-xl transition-colors flex items-center space-x-1"
+              title="Reply"
+            >
+              <CornerDownRight className="w-5 h-5" />
+            </button>
+
+            {/* Copy Button */}
+            {selectedMessage.content.text && (
+              <button
+                onClick={() => {
+                  handleCopyText(selectedMessage.content.text);
+                  setSelectedMessage(null);
+                  setShowExtendedPicker(false);
+                }}
+                className="p-2 hover:text-[#00a884] hover:bg-[#2a3942] rounded-xl transition-colors flex items-center space-x-1"
+                title="Copy text"
+              >
+                <Copy className="w-5 h-5" />
+              </button>
             )}
-
-            <div className="min-w-0">
-              <div className="flex items-center space-x-1.5">
-                <h3 className="font-semibold text-xs text-neutral-900 dark:text-neutral-100 truncate">
-                  {otherUser.fullName}
-                </h3>
-                {isVerified && (
-                  <span title="Safety Number Verified">
-                    <ShieldCheck className="w-3.5 h-3.5 text-neutral-900 dark:text-white shrink-0" />
-                  </span>
-                )}
-              </div>
-              <p className="text-[10px] text-neutral-400 font-mono truncate">
-                @{otherUser.username} • end-to-end encrypted
-              </p>
-            </div>
           </div>
         </div>
+      ) : (
+        <div className="px-4 py-2.5 bg-[#202c33] border-b border-[#2a3942] flex items-center justify-between shrink-0 z-20">
+          <div className="flex items-center space-x-3 min-w-0">
+            {onBack && (
+              <button
+                onClick={onBack}
+                className="p-1.5 text-[#8696a0] hover:text-[#e9edef] hover:bg-[#2a3942] rounded-lg md:hidden shrink-0"
+                title="Back"
+              >
+                <ArrowLeft className="w-4 h-4" />
+              </button>
+            )}
 
-        {/* Action icons on top right */}
-        <div className="flex items-center space-x-1 text-neutral-600 dark:text-neutral-400 shrink-0">
-          <button
-            onClick={() => setShowTimerMenu(!showTimerMenu)}
-            className={`p-2 hover:bg-neutral-100 dark:hover:bg-neutral-800 rounded-lg transition-colors relative ${
-              selectedConversation.ephemeralSetting !== 'off'
-                ? 'text-neutral-900 dark:text-white font-bold'
-                : ''
-            }`}
-            title={`Disappearing Timer: ${selectedConversation.ephemeralSetting}`}
-          >
-            <Clock className="w-4 h-4" />
-          </button>
+            <div
+              className="flex items-center space-x-3 cursor-pointer min-w-0"
+              onClick={() => setShowSafetyModal(true)}
+            >
+              <div className="relative shrink-0">
+                {hasOtherPhoto ? (
+                  <img
+                    src={otherUser.photoURL}
+                    alt={otherUser.fullName}
+                    className="w-10 h-10 rounded-full object-cover border border-[#2a3942]"
+                  />
+                ) : (
+                  <div className="w-10 h-10 rounded-full bg-[#111b21] text-[#e9edef] border border-[#2a3942] flex items-center justify-center font-bold text-xs select-none">
+                    {otherInitials}
+                  </div>
+                )}
+                <span className="absolute bottom-0 right-0 w-2.5 h-2.5 rounded-full bg-[#00a884] ring-2 ring-[#202c33]" />
+              </div>
 
-          <button
-            onClick={() => setShowOptionsMenu(!showOptionsMenu)}
-            className="p-2 hover:bg-neutral-100 dark:hover:bg-neutral-800 rounded-lg transition-colors"
-            title="Options"
-          >
-            <MoreVertical className="w-4 h-4" />
-          </button>
+              <div className="min-w-0">
+                <div className="flex items-center space-x-1.5 truncate">
+                  <h3 className="font-semibold text-sm text-[#e9edef] truncate">
+                    {otherUser.fullName}
+                  </h3>
+                  {isVerified && (
+                    <span title="Safety Number Verified">
+                      <ShieldCheck className="w-3.5 h-3.5 text-[#00a884] shrink-0" />
+                    </span>
+                  )}
+                </div>
+                <p className="text-[11px] text-[#8696a0] font-mono truncate flex items-center space-x-1">
+                  <span>@{otherUser.username}</span>
+                  <span>•</span>
+                  <span className="text-[#00a884]">end-to-end encrypted</span>
+                </p>
+              </div>
+            </div>
+          </div>
+
+          {/* Top Right Action Icons */}
+          <div className="flex items-center space-x-1 text-[#8696a0] shrink-0">
+            {/* Disappearing Timer Button */}
+            <button
+              onClick={() => setShowTimerMenu(!showTimerMenu)}
+              className={`p-2 hover:text-[#e9edef] hover:bg-[#2a3942] rounded-xl transition-colors relative ${
+                activeDisappearingTimer !== 'off' ? 'text-[#00a884] font-bold' : ''
+              }`}
+              title={`Disappearing Timer: ${activeDisappearingTimer}`}
+            >
+              <Clock className="w-4 h-4" />
+              {activeDisappearingTimer !== 'off' && (
+                <span className="absolute top-1 right-1 w-2 h-2 rounded-full bg-[#00a884]" />
+              )}
+            </button>
+
+            {/* Safety Number Shield Button */}
+            <button
+              onClick={() => setShowSafetyModal(true)}
+              className="p-2 hover:text-[#e9edef] hover:bg-[#2a3942] rounded-xl transition-colors"
+              title="Verify Safety Number"
+            >
+              <Shield className="w-4 h-4" />
+            </button>
+
+            {/* Options Menu */}
+            <button
+              onClick={() => setShowOptionsMenu(!showOptionsMenu)}
+              className="p-2 hover:text-[#e9edef] hover:bg-[#2a3942] rounded-xl transition-colors"
+              title="Options"
+            >
+              <MoreVertical className="w-4 h-4" />
+            </button>
+          </div>
         </div>
-      </div>
+      )}
 
-      {/* Disappearing Timer Menu Dropdown */}
+      {/* Disappearing Timer Menu Dropdown (WhatsApp-style) */}
       {showTimerMenu && (
-        <div className="absolute top-14 right-10 z-30 bg-white dark:bg-[#18181b] rounded-2xl shadow-xl border border-neutral-200 dark:border-neutral-800 p-1.5 text-xs w-48 text-neutral-800 dark:text-neutral-200">
-          <p className="px-2.5 py-1 font-bold text-[10px] uppercase text-neutral-400">
-            Disappearing Messages
-          </p>
+        <div
+          onClick={(e) => e.stopPropagation()}
+          className="absolute top-14 right-10 z-40 bg-[#202c33] rounded-2xl shadow-2xl border border-[#2a3942] p-2 text-xs w-60 text-[#e9edef]"
+        >
+          <div className="px-2.5 py-1.5 border-b border-[#2a3942] mb-1">
+            <p className="font-bold text-[11px] uppercase tracking-wider text-[#00a884]">
+              Disappearing Messages
+            </p>
+            <p className="text-[10px] text-[#8696a0] leading-snug mt-0.5">
+              Messages disappear from this device after reading, without altering the other user's device.
+            </p>
+          </div>
           {(['off', 'viewed', '1h', '24h', '7d'] as EphemeralSetting[]).map((timer) => (
             <button
               key={timer}
@@ -482,14 +595,14 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({ onBack }) => {
                 updateEphemeralSetting(timer);
                 setShowTimerMenu(false);
               }}
-              className={`w-full text-left px-3 py-1.5 rounded-lg flex items-center justify-between transition-colors ${
-                selectedConversation.ephemeralSetting === timer
-                  ? 'bg-neutral-900 dark:bg-white text-white dark:text-neutral-900 font-semibold'
-                  : 'hover:bg-neutral-100 dark:hover:bg-[#202024]'
+              className={`w-full text-left px-3 py-2 rounded-xl flex items-center justify-between transition-colors ${
+                activeDisappearingTimer === timer
+                  ? 'bg-[#00a884] text-white font-semibold'
+                  : 'hover:bg-[#2a3942] text-[#e9edef]'
               }`}
             >
-              <span>{timer === 'off' ? 'Off' : timer === 'viewed' ? 'After Viewed' : timer}</span>
-              {selectedConversation.ephemeralSetting === timer && <Check className="w-3.5 h-3.5" />}
+              <span>{timer === 'off' ? 'Off' : timer === 'viewed' ? 'After Reading (15s)' : timer}</span>
+              {activeDisappearingTimer === timer && <Check className="w-3.5 h-3.5" />}
             </button>
           ))}
         </div>
@@ -497,7 +610,10 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({ onBack }) => {
 
       {/* Options Dropdown */}
       {showOptionsMenu && (
-        <div className="absolute top-14 right-3 z-30 bg-[#18181b] rounded-2xl shadow-2xl border border-neutral-800 p-1.5 text-xs w-56 text-neutral-200 divide-y divide-neutral-800/80">
+        <div
+          onClick={(e) => e.stopPropagation()}
+          className="absolute top-14 right-3 z-40 bg-[#202c33] rounded-2xl shadow-2xl border border-[#2a3942] p-1.5 text-xs w-56 text-[#e9edef] divide-y divide-[#2a3942]"
+        >
           <div className="py-1">
             <button
               onClick={async () => {
@@ -507,17 +623,17 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({ onBack }) => {
                 }
                 setShowOptionsMenu(false);
               }}
-              className="w-full text-left px-3 py-2 rounded-lg hover:bg-[#202024] flex items-center space-x-2 transition-colors"
+              className="w-full text-left px-3 py-2 rounded-xl hover:bg-[#2a3942] flex items-center space-x-2 transition-colors"
             >
-              <Pin className={`w-3.5 h-3.5 ${selectedConversation.isPinned ? 'text-amber-500 fill-current' : ''}`} />
-              <span>{selectedConversation.isPinned ? 'Unpin chat' : 'Pin chat to top'}</span>
+              <Pin className={`w-3.5 h-3.5 ${selectedConversation.isPinned ? 'text-[#00a884] fill-current' : ''}`} />
+              <span>{selectedConversation.isPinned ? 'Unpin chat' : 'Pin chat (Max 5)'}</span>
             </button>
             <button
               onClick={() => {
                 toggleMuteConversation(selectedConversation.id);
                 setShowOptionsMenu(false);
               }}
-              className="w-full text-left px-3 py-2 rounded-lg hover:bg-[#202024] flex items-center space-x-2 transition-colors"
+              className="w-full text-left px-3 py-2 rounded-xl hover:bg-[#2a3942] flex items-center space-x-2 transition-colors"
             >
               <VolumeX className={`w-3.5 h-3.5 ${selectedConversation.isMuted ? 'text-rose-400' : ''}`} />
               <span>{selectedConversation.isMuted ? 'Unmute notifications' : 'Mute chat'}</span>
@@ -530,24 +646,24 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({ onBack }) => {
                 setShowOptionsMenu(false);
                 setShowSafetyModal(true);
               }}
-              className="w-full text-left px-3 py-2 rounded-lg hover:bg-[#202024] flex items-center space-x-2 transition-colors"
+              className="w-full text-left px-3 py-2 rounded-xl hover:bg-[#2a3942] flex items-center space-x-2 transition-colors"
             >
               <Shield className="w-3.5 h-3.5" />
-              <span>Verify Safety Number</span>
+              <span>Verify Safety Fingerprint</span>
             </button>
             <button
               onClick={handleCopyContactLink}
-              className="w-full text-left px-3 py-2 rounded-lg hover:bg-[#202024] flex items-center space-x-2 transition-colors"
+              className="w-full text-left px-3 py-2 rounded-xl hover:bg-[#2a3942] flex items-center space-x-2 transition-colors"
             >
               <LinkIcon className="w-3.5 h-3.5" />
-              <span>Copy Contact Account Link</span>
+              <span>Copy Account Direct Link</span>
             </button>
             <button
               onClick={() => {
                 setShowOptionsMenu(false);
                 setShowTimerMenu(true);
               }}
-              className="w-full text-left px-3 py-2 rounded-lg hover:bg-[#202024] flex items-center space-x-2 transition-colors"
+              className="w-full text-left px-3 py-2 rounded-xl hover:bg-[#2a3942] flex items-center space-x-2 transition-colors"
             >
               <Clock className="w-3.5 h-3.5" />
               <span>Disappearing messages</span>
@@ -560,7 +676,7 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({ onBack }) => {
                 setShowOptionsMenu(false);
                 deleteConversationLocally(selectedConversation.id);
               }}
-              className="w-full text-left px-3 py-2 rounded-lg hover:bg-[#202024] text-rose-500 hover:text-rose-400 flex items-center space-x-2 transition-colors"
+              className="w-full text-left px-3 py-2 rounded-xl hover:bg-[#2a3942] text-rose-400 flex items-center space-x-2 transition-colors"
             >
               <Trash2 className="w-3.5 h-3.5" />
               <span>Delete conversation</span>
@@ -570,28 +686,29 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({ onBack }) => {
       )}
 
       {copiedNotice && (
-        <div className="absolute top-16 left-1/2 -translate-x-1/2 z-30 px-3.5 py-1.5 bg-neutral-900 border border-neutral-700 text-white text-xs rounded-xl shadow-xl animate-in fade-in zoom-in-95">
+        <div className="absolute top-16 left-1/2 -translate-x-1/2 z-40 px-3.5 py-1.5 bg-[#202c33] border border-[#2a3942] text-[#e9edef] text-xs rounded-xl shadow-2xl animate-in fade-in zoom-in-95">
           {copiedNotice}
         </div>
       )}
 
-      {/* Main Messages Scroll Area */}
-      <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-4 min-h-0 bg-[#09090b]">
-        {/* Encryption Header Notice */}
+      {/* Main Messages Scroll Area (WhatsApp-grade Wallpaper & Layout) */}
+      <div className="flex-1 overflow-y-auto p-4 sm:p-5 space-y-3 min-h-0 bg-[#0b141a] bg-[radial-gradient(#182229_1px,transparent_1px)] [background-size:18px_18px]">
+        {/* WhatsApp-style E2EE Notice Banner */}
         <div className="text-center py-2">
-          <div className="inline-flex items-center space-x-1.5 px-3.5 py-1 bg-[#121215] border border-neutral-800 rounded-full text-[11px] text-neutral-400 shadow-2xs">
-            <Shield className="w-3 h-3 text-emerald-400" />
-            <span>Messages are end-to-end encrypted. No cloud plaintext.</span>
+          <div className="inline-flex items-center space-x-2 px-3.5 py-2 bg-[#182229] border border-[#222e35] rounded-xl text-[11px] text-[#ffd279] shadow-sm max-w-md mx-auto text-center leading-relaxed">
+            <Lock className="w-3.5 h-3.5 text-[#ffd279] shrink-0" />
+            <span>
+              Messages to this chat are end-to-end encrypted. No one outside of this chat, not even Aegis or Firebase, can read them.
+            </span>
           </div>
         </div>
 
         {/* Message Thread */}
         {messages.map((m) => {
           const isSender = m.senderUid === user?.uid;
-          const isStarred = starredMsgIds.has(m.id);
           const replyParent = m.replyToId ? messages.find((p) => p.id === m.replyToId) : null;
           const swipeOffset = swipeOffsets[m.id] || 0;
-          const isReactionPickerOpen = reactionPickerMsgId === m.id;
+          const isSelected = selectedMessage?.id === m.id;
 
           return (
             <div
@@ -601,7 +718,7 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({ onBack }) => {
               {/* Swipe to reply sliding indicator */}
               {swipeOffset > 8 && (
                 <div
-                  className="absolute left-2 top-1/2 -translate-y-1/2 w-8 h-8 rounded-full bg-neutral-800 border border-neutral-700 text-emerald-400 flex items-center justify-center transition-all shadow-md z-10 pointer-events-none"
+                  className="absolute left-2 top-1/2 -translate-y-1/2 w-8 h-8 rounded-full bg-[#202c33] border border-[#2a3942] text-[#00a884] flex items-center justify-center transition-all shadow-md z-10 pointer-events-none"
                   style={{
                     opacity: Math.min(swipeOffset / 35, 1),
                     transform: `translateY(-50%) scale(${Math.min(swipeOffset / 35, 1)})`,
@@ -611,23 +728,23 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({ onBack }) => {
                 </div>
               )}
 
-              {/* Reaction & Action Bar (WhatsApp style popup on click or hold) */}
-              {isReactionPickerOpen && (
+              {/* Reaction Bar (Floating above bubble when message is selected) */}
+              {isSelected && (
                 <div
-                  className={`absolute -top-12 z-40 flex items-center space-x-1 p-1 bg-[#18181b] border border-neutral-700 rounded-full shadow-2xl animate-in zoom-in-95 duration-150 backdrop-blur-md ${
+                  onClick={(e) => e.stopPropagation()}
+                  className={`absolute -top-11 z-40 flex items-center space-x-1 p-1 bg-[#202c33] border border-[#2a3942] rounded-full shadow-2xl animate-in zoom-in-95 duration-150 backdrop-blur-md ${
                     isSender ? 'right-0' : 'left-0'
                   }`}
-                  onClick={(e) => e.stopPropagation()}
                 >
                   {PRIMARY_EMOJIS.map((emoji) => (
                     <button
                       key={emoji}
                       onClick={() => {
                         addMessageReaction(m.id, emoji);
-                        setReactionPickerMsgId(null);
+                        setSelectedMessage(null);
                         setShowExtendedPicker(false);
                       }}
-                      className="w-7 h-7 flex items-center justify-center text-sm hover:scale-130 active:scale-95 transition-transform rounded-full hover:bg-neutral-800"
+                      className="w-7 h-7 flex items-center justify-center text-sm hover:scale-130 active:scale-95 transition-transform rounded-full hover:bg-[#2a3942]"
                       title={`React ${emoji}`}
                     >
                       {emoji}
@@ -635,99 +752,51 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({ onBack }) => {
                   ))}
                   <button
                     onClick={() => setShowExtendedPicker(!showExtendedPicker)}
-                    className="w-6 h-6 flex items-center justify-center text-xs font-bold text-neutral-400 hover:text-white rounded-full hover:bg-neutral-800"
-                    title="More & Custom Emojis"
+                    className="w-6 h-6 flex items-center justify-center text-xs font-bold text-[#8696a0] hover:text-[#e9edef] rounded-full hover:bg-[#2a3942]"
+                    title="More Emojis"
                   >
                     +
                   </button>
 
-                  <div className="h-4 w-[1px] bg-neutral-700 mx-0.5" />
-
-                  {/* Quick message actions within selection bar */}
-                  {m.content.text && (
-                    <button
-                      onClick={() => {
-                        handleCopyText(m.content.text);
-                        setReactionPickerMsgId(null);
-                      }}
-                      className="w-6 h-6 flex items-center justify-center text-neutral-400 hover:text-white rounded-full hover:bg-neutral-800"
-                      title="Copy message"
-                    >
-                      <Copy className="w-3 h-3" />
-                    </button>
-                  )}
-                  <button
-                    onClick={() => {
-                      setReplyingTo(m);
-                      setReactionPickerMsgId(null);
-                    }}
-                    className="w-6 h-6 flex items-center justify-center text-neutral-400 hover:text-white rounded-full hover:bg-neutral-800"
-                    title="Reply"
-                  >
-                    <CornerDownRight className="w-3 h-3" />
-                  </button>
-                  <button
-                    onClick={() => {
-                      handleToggleStar(m.id);
-                      setReactionPickerMsgId(null);
-                    }}
-                    className={`w-6 h-6 flex items-center justify-center rounded-full hover:bg-neutral-800 ${
-                      isStarred ? 'text-amber-400' : 'text-neutral-400 hover:text-white'
-                    }`}
-                    title="Star message"
-                  >
-                    <Star className="w-3 h-3" />
-                  </button>
-                  <button
-                    onClick={() => {
-                      deleteMessageLocally(m.id);
-                      setReactionPickerMsgId(null);
-                    }}
-                    className="w-6 h-6 flex items-center justify-center text-neutral-400 hover:text-rose-400 rounded-full hover:bg-neutral-800"
-                    title="Delete message"
-                  >
-                    <Trash2 className="w-3 h-3" />
-                  </button>
-
                   {/* Extended Emoji Grid & Custom Emoji Input */}
                   {showExtendedPicker && (
-                    <div className="absolute top-11 left-0 bg-[#1c1c20] border border-neutral-700 p-2.5 rounded-2xl shadow-2xl space-y-2 w-64 z-50 animate-in fade-in zoom-in-95">
+                    <div className="absolute top-10 left-0 bg-[#202c33] border border-[#2a3942] p-2.5 rounded-2xl shadow-2xl space-y-2 w-64 z-50 animate-in fade-in zoom-in-95">
                       <div className="grid grid-cols-6 gap-1">
                         {EXTENDED_EMOJIS.map((extEmoji) => (
                           <button
                             key={extEmoji}
                             onClick={() => {
                               addMessageReaction(m.id, extEmoji);
-                              setReactionPickerMsgId(null);
+                              setSelectedMessage(null);
                               setShowExtendedPicker(false);
                             }}
-                            className="w-8 h-8 flex items-center justify-center text-sm hover:scale-125 transition-transform rounded-lg hover:bg-neutral-800"
+                            className="w-8 h-8 flex items-center justify-center text-sm hover:scale-125 transition-transform rounded-lg hover:bg-[#2a3942]"
                           >
                             {extEmoji}
                           </button>
                         ))}
                       </div>
 
-                      {/* Custom Emoji / Reactor input */}
-                      <div className="flex items-center space-x-1.5 pt-1.5 border-t border-neutral-800">
+                      {/* Custom Emoji Input */}
+                      <div className="flex items-center space-x-1.5 pt-1.5 border-t border-[#2a3942]">
                         <input
                           type="text"
                           placeholder="Custom emoji..."
-                          maxLength={6}
+                          maxLength={4}
                           value={customEmojiInput}
                           onChange={(e) => setCustomEmojiInput(e.target.value)}
-                          className="flex-1 px-2 py-1 bg-black rounded-lg text-xs text-white border border-neutral-700 focus:outline-none"
+                          className="flex-1 px-2 py-1 bg-[#111b21] rounded-lg text-xs text-[#e9edef] border border-[#2a3942] focus:outline-none"
                         />
                         <button
                           onClick={() => {
                             if (customEmojiInput.trim()) {
                               addMessageReaction(m.id, customEmojiInput.trim());
                               setCustomEmojiInput('');
-                              setReactionPickerMsgId(null);
+                              setSelectedMessage(null);
                               setShowExtendedPicker(false);
                             }
                           }}
-                          className="px-2.5 py-1 bg-white text-black font-bold text-xs rounded-lg hover:bg-neutral-200"
+                          className="px-2.5 py-1 bg-[#00a884] text-white font-bold text-xs rounded-lg hover:bg-[#009272]"
                         >
                           React
                         </button>
@@ -737,58 +806,60 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({ onBack }) => {
                 </div>
               )}
 
-              {/* Message Bubble Container with touch gesture & click/hold selector */}
+              {/* Message Bubble Container (Trigger select ONLY on holding / long press) */}
               <div
-                onClick={() => {
-                  setReactionPickerMsgId(reactionPickerMsgId === m.id ? null : m.id);
-                  setShowExtendedPicker(false);
-                }}
                 onContextMenu={(e) => {
                   e.preventDefault();
-                  setReactionPickerMsgId(m.id);
+                  e.stopPropagation();
+                  setSelectedMessage(m);
                   setShowExtendedPicker(false);
                 }}
-                onTouchStart={(e) => handleTouchStart(m.id, e)}
+                onMouseDown={(e) => handleMouseDown(m, e)}
+                onMouseUp={handleMouseUp}
+                onTouchStart={(e) => handleTouchStart(m, e)}
                 onTouchMove={(e) => handleTouchMove(m.id, e)}
                 onTouchEnd={() => handleTouchEnd(m)}
                 style={{
                   transform: swipeOffset > 0 ? `translateX(${swipeOffset}px)` : undefined,
                   transition: swipeOffset === 0 ? 'transform 0.2s cubic-bezier(0.2, 0, 0, 1)' : undefined,
                 }}
-                className={`relative px-3.5 py-2.5 rounded-2xl text-xs shadow-sm max-w-[85%] sm:max-w-md cursor-pointer transition-all ${
-                  isReactionPickerOpen ? 'ring-2 ring-emerald-500/50' : ''
+                className={`relative px-3.5 py-2 rounded-2xl text-[13px] shadow-sm max-w-[85%] sm:max-w-md transition-all ${
+                  isSelected ? 'ring-2 ring-[#00a884] brightness-110' : ''
                 } ${
                   isSender
-                    ? 'bg-[#27272a] text-white rounded-br-xs border border-neutral-700/60'
-                    : 'bg-[#18181b] text-white rounded-bl-xs border border-neutral-800'
+                    ? 'bg-[#005c4b] text-[#e9edef] rounded-tr-xs border border-[#005c4b]/40'
+                    : 'bg-[#202c33] text-[#e9edef] rounded-tl-xs border border-[#2a3942]/60'
                 }`}
               >
                 {/* Reply Citation */}
                 {replyParent && (
                   <div
-                    className={`mb-2 p-2 rounded-lg border-l-2 text-[11px] opacity-85 ${
+                    className={`mb-1.5 p-2 rounded-lg border-l-3 text-[11px] ${
                       isSender
-                        ? 'bg-black/30 border-emerald-400 text-neutral-200'
-                        : 'bg-neutral-900 border-neutral-500 text-neutral-300'
+                        ? 'bg-[#025144] border-[#25d366] text-[#e9edef]/90'
+                        : 'bg-[#111b21] border-[#00a884] text-[#e9edef]/90'
                     }`}
                   >
-                    <p className="font-semibold text-[10px] text-emerald-400">
+                    <p className="font-semibold text-[10px] text-[#25d366]">
                       {replyParent.senderUid === user?.uid ? 'You' : otherUser.fullName}
                     </p>
                     <p className="truncate">
-                      {replyParent.content.text || (replyParent.content.imageBase64 ? 'Photo' : '')}
+                      {replyParent.content.text || (replyParent.content.imageBase64 ? 'Photo' : 'Voice note')}
                     </p>
                   </div>
                 )}
 
-                {/* Attached Image with Download Button */}
+                {/* Attached Image */}
                 {m.content.imageBase64 && (
-                  <div className="relative mb-2 rounded-xl overflow-hidden group/img">
+                  <div className="relative mb-1.5 rounded-xl overflow-hidden group/img">
                     <img
                       src={m.content.imageBase64}
                       alt={m.content.fileName || 'Attachment'}
-                      onClick={() => setSelectedImageFull(m.content.imageBase64!)}
-                      className="max-h-64 rounded-xl object-cover hover:opacity-95 transition-opacity cursor-pointer border border-neutral-700/50"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setSelectedImageFull(m.content.imageBase64!);
+                      }}
+                      className="max-h-64 rounded-xl object-cover hover:opacity-95 transition-opacity cursor-pointer border border-[#2a3942]"
                     />
                     <button
                       type="button"
@@ -804,7 +875,7 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({ onBack }) => {
 
                 {/* Voice Audio Message Player (WhatsApp style) */}
                 {m.content.voiceAudioBase64 && (
-                  <div className="mb-1">
+                  <div className="mb-0.5">
                     <VoiceAudioPlayer
                       audioBase64={m.content.voiceAudioBase64}
                       durationSeconds={m.content.voiceDurationSeconds}
@@ -815,43 +886,45 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({ onBack }) => {
 
                 {/* Plaintext Content */}
                 {m.content.text && (
-                  <p className="whitespace-pre-wrap break-words leading-relaxed select-text">
+                  <p className="whitespace-pre-wrap break-words leading-relaxed select-text pr-1">
                     {m.content.text}
                   </p>
                 )}
 
-                {/* Footer: Timestamp, Ephemeral, Status */}
+                {/* Footer: Timestamp, Ephemeral, Status checkmarks inside bubble corner */}
                 <div
-                  className={`flex items-center justify-end space-x-1 mt-1 text-[9px] select-none text-neutral-400`}
+                  className="flex items-center justify-end space-x-1 mt-0.5 text-[10px] select-none text-[#8696a0]"
                 >
-                  {isStarred && <Star className="w-2.5 h-2.5 fill-current text-amber-400" />}
                   {m.ephemeralType !== 'off' && <Clock className="w-2.5 h-2.5" />}
                   <span>{formatMsgTime(m.timestamp)}</span>
                   {isSender && (
                     <span>
                       {m.status === 'delivered' || m.status === 'read' ? (
-                        <CheckCheck className="w-3 h-3 text-emerald-400" />
+                        <CheckCheck className="w-3.5 h-3.5 text-[#53bdeb]" />
                       ) : (
-                        <Check className="w-3 h-3 text-neutral-400" />
+                        <Check className="w-3.5 h-3.5 text-[#8696a0]" />
                       )}
                     </span>
                   )}
                 </div>
               </div>
 
-              {/* Reaction Badges Display under bubble */}
+              {/* Reaction Badges Display under bubble (Clean counter pills, no action buttons!) */}
               {m.reactions && Object.keys(m.reactions).length > 0 && (
-                <div className="flex flex-wrap gap-1 px-1 z-10">
+                <div className="flex flex-wrap gap-1 px-1 z-10 -mt-1">
                   {Object.entries(m.reactions).map(([emoji, uids]) => {
                     const hasMyReaction = user && uids.includes(user.uid);
                     return (
                       <button
                         key={emoji}
-                        onClick={() => addMessageReaction(m.id, emoji)}
-                        className={`inline-flex items-center space-x-1 px-2 py-0.5 rounded-full text-xs border transition-colors ${
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          addMessageReaction(m.id, emoji);
+                        }}
+                        className={`inline-flex items-center space-x-1 px-2 py-0.5 rounded-full text-xs border transition-colors shadow-xs ${
                           hasMyReaction
-                            ? 'bg-[#27272a] border-emerald-500/80 text-white font-bold'
-                            : 'bg-[#18181b] border-neutral-800 text-neutral-300 hover:border-neutral-700'
+                            ? 'bg-[#202c33] border-[#00a884] text-white font-bold'
+                            : 'bg-[#182229] border-[#2a3942] text-[#8696a0] hover:text-[#e9edef]'
                         }`}
                         title={`${uids.length} reaction${uids.length > 1 ? 's' : ''}`}
                       >
@@ -862,76 +935,29 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({ onBack }) => {
                   })}
                 </div>
               )}
-
-              {/* Message Actions (Quick access buttons) */}
-              <div
-                className={`flex items-center space-x-1 px-1 text-neutral-400 text-[11px] ${
-                  isReactionPickerOpen ? 'opacity-100' : 'opacity-70 sm:opacity-0 sm:group-hover:opacity-100'
-                } transition-opacity`}
-              >
-                <button
-                  onClick={() => {
-                    setReactionPickerMsgId(reactionPickerMsgId === m.id ? null : m.id);
-                    setShowExtendedPicker(false);
-                  }}
-                  className="p-1 hover:text-white rounded hover:bg-neutral-800"
-                  title="React with Emoji"
-                >
-                  <Smile className="w-3.5 h-3.5" />
-                </button>
-                <button
-                  onClick={() => setReplyingTo(m)}
-                  className="p-1 hover:text-white rounded hover:bg-neutral-800"
-                  title="Reply (Swipe right)"
-                >
-                  <CornerDownRight className="w-3.5 h-3.5" />
-                </button>
-                <button
-                  onClick={() => handleCopyText(m.content.text)}
-                  className="p-1 hover:text-white rounded hover:bg-neutral-800"
-                  title="Copy text"
-                >
-                  <Copy className="w-3.5 h-3.5" />
-                </button>
-                <button
-                  onClick={() => handleToggleStar(m.id)}
-                  className="p-1 hover:text-white rounded hover:bg-neutral-800"
-                  title="Star"
-                >
-                  <Star className="w-3.5 h-3.5" />
-                </button>
-                <button
-                  onClick={() => deleteMessageLocally(m.id)}
-                  className="p-1 hover:text-rose-400 rounded hover:bg-neutral-800"
-                  title="Delete locally"
-                >
-                  <Trash2 className="w-3.5 h-3.5" />
-                </button>
-              </div>
             </div>
           );
         })}
-
         <div ref={messagesEndRef} />
       </div>
 
-      {/* Reply Preview Bar */}
+      {/* Replying Banner */}
       {replyingTo && (
-        <div className="px-4 py-2 bg-neutral-100 dark:bg-[#18181b] border-t border-neutral-200 dark:border-neutral-800 flex items-center justify-between text-xs shrink-0">
-          <div className="flex items-center space-x-2 truncate">
-            <CornerDownRight className="w-4 h-4 text-neutral-500 shrink-0" />
+        <div className="px-4 py-2 bg-[#202c33] border-t border-[#2a3942] flex items-center justify-between z-20">
+          <div className="flex items-center space-x-2 text-xs truncate">
+            <CornerDownRight className="w-4 h-4 text-[#00a884] shrink-0" />
             <div className="truncate">
-              <span className="font-semibold text-neutral-900 dark:text-white">
+              <span className="font-semibold text-[#00a884]">
                 Replying to {replyingTo.senderUid === user?.uid ? 'yourself' : otherUser.fullName}:
-              </span>{' '}
-              <span className="text-neutral-500">
-                {replyingTo.content.text || (replyingTo.content.imageBase64 ? 'Photo' : '')}
+              </span>
+              <span className="text-[#8696a0] ml-1 truncate">
+                {replyingTo.content.text || (replyingTo.content.imageBase64 ? 'Photo' : 'Voice note')}
               </span>
             </div>
           </div>
           <button
             onClick={() => setReplyingTo(null)}
-            className="p-1 text-neutral-400 hover:text-neutral-900 dark:hover:text-white"
+            className="p-1 text-[#8696a0] hover:text-[#e9edef] rounded-lg"
           >
             <X className="w-4 h-4" />
           </button>
@@ -940,43 +966,24 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({ onBack }) => {
 
       {/* Send Error Notice */}
       {sendError && (
-        <div className="px-4 py-2 bg-neutral-100 dark:bg-[#1a1a1f] border-t border-neutral-300 dark:border-neutral-700 flex items-center justify-between text-xs text-neutral-800 dark:text-neutral-200">
-          <div className="flex items-center space-x-2">
-            <AlertCircle className="w-3.5 h-3.5 text-neutral-500" />
-            <span>{sendError}</span>
-          </div>
-          <button
-            type="button"
-            onClick={() => setSendError(null)}
-            className="text-neutral-400 hover:text-neutral-700 dark:hover:text-neutral-200 text-xs ml-2"
-          >
-            Dismiss
+        <div className="px-4 py-1.5 bg-rose-950/80 border-t border-rose-800 text-rose-300 text-xs flex items-center justify-between z-20">
+          <span>{sendError}</span>
+          <button onClick={() => setSendError(null)} className="p-1">
+            <X className="w-3.5 h-3.5" />
           </button>
         </div>
       )}
 
-      {/* Message Composer / WhatsApp-style Voice Recording Bar (Always pinned at bottom) */}
+      {/* Bottom Input Area (WhatsApp style) */}
       {isRecording ? (
-        <div className="p-3 sm:p-4 bg-white dark:bg-[#121215] border-t border-neutral-200 dark:border-neutral-800 flex items-center justify-between space-x-3 shrink-0 z-20">
-          <div className="flex items-center space-x-3 flex-1 min-w-0">
-            {/* Pulsing Red Recording Indicator */}
-            <div className="flex items-center space-x-2 shrink-0">
-              <span className="w-2.5 h-2.5 rounded-full bg-red-500 animate-pulse shrink-0" />
-              <span className="text-xs font-mono font-bold text-red-500 dark:text-red-400">
-                {Math.floor(recordingSeconds / 60)}:{(recordingSeconds % 60) < 10 ? '0' : ''}{recordingSeconds % 60}
-              </span>
+        <div className="p-3 bg-[#202c33] border-t border-[#2a3942] flex items-center justify-between shrink-0 z-20 animate-in fade-in">
+          <div className="flex items-center space-x-3">
+            <div className="w-3.5 h-3.5 rounded-full bg-rose-500 animate-pulse shadow-sm" />
+            <div className="text-xs font-mono font-bold text-[#e9edef]">
+              {Math.floor(recordingSeconds / 60)}:
+              {recordingSeconds % 60 < 10 ? `0${recordingSeconds % 60}` : recordingSeconds % 60}
             </div>
-
-            {/* Visualizer animation bars */}
-            <div className="flex items-center space-x-1 flex-1 overflow-hidden h-5 max-w-xs">
-              {[40, 70, 90, 50, 80, 100, 60, 40, 75, 95, 60, 85, 50, 70, 90, 60, 45, 80].map((h, i) => (
-                <div
-                  key={i}
-                  style={{ height: `${h}%` }}
-                  className="w-1 bg-emerald-500 rounded-full animate-pulse"
-                />
-              ))}
-            </div>
+            <span className="text-xs text-[#8696a0] italic">Recording encrypted voice note...</span>
           </div>
 
           <div className="flex items-center space-x-2 shrink-0">
@@ -984,7 +991,7 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({ onBack }) => {
             <button
               type="button"
               onClick={cancelVoiceRecording}
-              className="p-2 text-neutral-400 hover:text-rose-500 hover:bg-neutral-100 dark:hover:bg-neutral-800 rounded-xl transition-colors"
+              className="p-2 text-[#8696a0] hover:text-rose-400 hover:bg-[#2a3942] rounded-xl transition-colors"
               title="Cancel recording"
             >
               <Trash2 className="w-4 h-4" />
@@ -995,7 +1002,7 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({ onBack }) => {
               type="button"
               onClick={stopAndSendVoiceRecording}
               disabled={sending}
-              className="p-2.5 bg-emerald-500 hover:bg-emerald-400 text-white rounded-xl transition-transform active:scale-95 shadow-sm"
+              className="p-2.5 bg-[#00a884] hover:bg-[#009272] text-white rounded-full transition-transform active:scale-95 shadow-md"
               title="Send voice note"
             >
               <Send className="w-4 h-4" />
@@ -1005,7 +1012,7 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({ onBack }) => {
       ) : (
         <form
           onSubmit={handleSendText}
-          className="p-3 sm:p-4 bg-white dark:bg-[#121215] border-t border-neutral-200 dark:border-neutral-800 flex items-center space-x-2 shrink-0 z-20"
+          className="p-2.5 sm:p-3 bg-[#202c33] border-t border-[#2a3942] flex items-center space-x-2 shrink-0 z-20"
         >
           <input
             type="file"
@@ -1018,10 +1025,10 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({ onBack }) => {
           <button
             type="button"
             onClick={() => fileInputRef.current?.click()}
-            className="p-2 text-neutral-500 hover:text-neutral-900 dark:hover:text-white hover:bg-neutral-100 dark:hover:bg-neutral-800 rounded-xl transition-colors shrink-0"
-            title="Send Encrypted Image"
+            className="p-2.5 text-[#8696a0] hover:text-[#e9edef] hover:bg-[#2a3942] rounded-full transition-colors shrink-0"
+            title="Attach Encrypted Photo"
           >
-            <Paperclip className="w-4 h-4" />
+            <Paperclip className="w-5 h-5" />
           </button>
 
           <input
@@ -1029,15 +1036,15 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({ onBack }) => {
             type="text"
             value={textInput}
             onChange={(e) => setTextInput(e.target.value)}
-            placeholder="Type an encrypted message..."
-            className="flex-1 px-3.5 py-2.5 bg-neutral-100 dark:bg-[#18181b] rounded-xl text-xs text-neutral-900 dark:text-neutral-100 placeholder-neutral-400 border border-neutral-200 dark:border-neutral-800 focus:outline-none focus:border-neutral-900 dark:focus:border-white transition-colors"
+            placeholder="Type a message..."
+            className="flex-1 px-4 py-2.5 bg-[#2a3942] rounded-2xl text-xs sm:text-sm text-[#e9edef] placeholder-[#8696a0] border-none focus:outline-none transition-colors"
           />
 
           {textInput.trim() ? (
             <button
               type="submit"
               disabled={!textInput.trim() || sending}
-              className="p-2.5 bg-neutral-900 hover:bg-neutral-800 dark:bg-white dark:hover:bg-neutral-200 text-white dark:text-neutral-900 rounded-xl transition-colors disabled:opacity-40 shrink-0 shadow-xs"
+              className="p-2.5 bg-[#00a884] hover:bg-[#009272] text-white rounded-full transition-colors disabled:opacity-40 shrink-0 shadow-md"
               title="Send"
             >
               <Send className="w-4 h-4" />
@@ -1046,8 +1053,8 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({ onBack }) => {
             <button
               type="button"
               onClick={startVoiceRecording}
-              className="p-2.5 bg-neutral-100 dark:bg-[#18181b] hover:bg-neutral-200 dark:hover:bg-[#202024] text-emerald-500 rounded-xl transition-transform active:scale-95 shrink-0 shadow-xs border border-neutral-200 dark:border-neutral-800"
-              title="Record voice message (WhatsApp style)"
+              className="p-2.5 bg-[#00a884] hover:bg-[#009272] text-white rounded-full transition-transform active:scale-95 shrink-0 shadow-md"
+              title="Record voice note (WhatsApp style)"
             >
               <Mic className="w-4 h-4" />
             </button>
@@ -1058,24 +1065,24 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({ onBack }) => {
       {/* Modal: Safety Number Verification */}
       {showSafetyModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
-          <div className="relative w-full max-w-md bg-white dark:bg-[#121215] rounded-3xl shadow-2xl border border-neutral-200 dark:border-neutral-800 p-6 sm:p-8 text-center space-y-4 text-neutral-900 dark:text-neutral-100">
+          <div className="relative w-full max-w-md bg-[#202c33] rounded-3xl shadow-2xl border border-[#2a3942] p-6 sm:p-8 text-center space-y-4 text-[#e9edef]">
             <button
               onClick={() => setShowSafetyModal(false)}
-              className="absolute top-4 right-4 p-2 text-neutral-400 hover:text-neutral-900 dark:hover:text-white rounded-full"
+              className="absolute top-4 right-4 p-2 text-[#8696a0] hover:text-[#e9edef] rounded-full"
             >
               <X className="w-5 h-5" />
             </button>
 
-            <div className="w-12 h-12 rounded-full bg-neutral-100 dark:bg-[#18181b] text-neutral-900 dark:text-white flex items-center justify-center mx-auto border border-neutral-200 dark:border-neutral-800">
+            <div className="w-12 h-12 rounded-full bg-[#111b21] text-[#00a884] flex items-center justify-center mx-auto border border-[#2a3942]">
               <ShieldCheck className="w-6 h-6" />
             </div>
 
-            <h3 className="text-xl font-bold tracking-tight">Verify Safety Number</h3>
-            <p className="text-xs text-neutral-500 dark:text-neutral-400">
-              Compare this fingerprint with {otherUser.fullName} (@{otherUser.username}) to confirm end-to-end encryption.
+            <h3 className="text-xl font-bold tracking-tight">Verify Safety Fingerprint</h3>
+            <p className="text-xs text-[#8696a0]">
+              Compare this fingerprint with {otherUser.fullName} (@{otherUser.username}) to confirm end-to-end encryption integrity.
             </p>
 
-            <div className="p-4 bg-neutral-100 dark:bg-[#18181b] rounded-2xl border border-neutral-200 dark:border-neutral-800 font-mono text-xs sm:text-sm tracking-wider text-neutral-900 dark:text-white whitespace-pre-line leading-relaxed select-all">
+            <div className="p-4 bg-[#111b21] rounded-2xl border border-[#2a3942] font-mono text-xs sm:text-sm tracking-wider text-[#e9edef] whitespace-pre-line leading-relaxed select-all">
               {safetyFingerprint}
             </div>
 
@@ -1083,8 +1090,8 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({ onBack }) => {
               onClick={toggleSafetyVerification}
               className={`w-full py-2.5 font-bold rounded-xl transition-all text-xs ${
                 isVerified
-                  ? 'bg-neutral-200 dark:bg-[#202024] text-neutral-800 dark:text-neutral-200'
-                  : 'bg-neutral-900 hover:bg-neutral-800 dark:bg-white dark:hover:bg-neutral-200 text-white dark:text-neutral-900 shadow-xs'
+                  ? 'bg-[#2a3942] text-[#8696a0]'
+                  : 'bg-[#00a884] hover:bg-[#009272] text-white shadow-md'
               }`}
             >
               {isVerified ? 'Mark as Unverified' : 'Mark as Verified'}
@@ -1105,7 +1112,7 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({ onBack }) => {
           >
             <button
               onClick={(e) => handleDownloadImage(e, selectedImageFull)}
-              className="px-3.5 py-2 text-white bg-neutral-800/90 hover:bg-neutral-700 rounded-xl border border-neutral-700 flex items-center space-x-1.5 text-xs font-semibold shadow-lg transition-colors"
+              className="px-3.5 py-2 text-white bg-[#202c33] hover:bg-[#2a3942] rounded-xl border border-[#2a3942] flex items-center space-x-1.5 text-xs font-semibold shadow-lg transition-colors"
               title="Download image"
             >
               <Download className="w-4 h-4" />
@@ -1113,7 +1120,7 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({ onBack }) => {
             </button>
             <button
               onClick={() => setSelectedImageFull(null)}
-              className="p-2 text-white bg-neutral-800/90 hover:bg-neutral-700 rounded-xl border border-neutral-700 transition-colors"
+              className="p-2 text-white bg-[#202c33] hover:bg-[#2a3942] rounded-xl border border-[#2a3942] transition-colors"
               title="Close"
             >
               <X className="w-5 h-5" />
@@ -1122,7 +1129,7 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({ onBack }) => {
           <img
             src={selectedImageFull}
             alt="Attachment"
-            className="max-w-full max-h-[85vh] rounded-2xl shadow-2xl object-contain border border-neutral-800"
+            className="max-w-full max-h-[85vh] rounded-2xl shadow-2xl object-contain border border-[#2a3942]"
           />
         </div>
       )}

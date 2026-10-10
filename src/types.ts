@@ -61,6 +61,7 @@ export interface Conversation {
   isPinned?: boolean;
   isMuted?: boolean;
   participantDetails?: Record<string, Partial<UserProfile>>;
+  localEphemeralSetting?: EphemeralSetting;
 }
 
 export interface EncryptedMessagePayload {
@@ -95,6 +96,8 @@ export interface DecryptedMessage {
   status: 'sending' | 'sent' | 'delivered' | 'read' | 'expired';
   timestamp: string;
   expiresAtTimestamp?: number; // UNIX ms for expiration
+  localDisappearAtTimestamp?: number; // UNIX ms for local device disappearance
+  readAtTimestamp?: number;
   reactions?: Record<string, string[]>;
   replyToId?: string;
 }
