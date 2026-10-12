@@ -40,6 +40,7 @@ export const DirectChatInvitePage: React.FC<DirectChatInvitePageProps> = ({
 
       try {
         const usernameSnap = await getDoc(doc(db, 'usernames', cleanTarget));
+        console.log('Resolving user:', cleanTarget, 'exists:', usernameSnap.exists());
         if (!usernameSnap.exists()) {
           setNotFound(true);
           setLoading(false);

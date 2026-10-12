@@ -1,12 +1,12 @@
 {
-  "projectId": "elaborate-valor-f2t1j",
-  "appId": "1:193733254976:web:8ba04c424389e3dd1fa4a5",
-  "apiKey": "AIzaSyARuaG8wXchD_21vQQcgMkBam1eFpDyn7w",
-  "authDomain": "elaborate-valor-f2t1j.firebaseapp.com",
-  "firestoreDatabaseId": "ai-studio-aegisprivatebyde-21bae5a3-cb59-4405-943e-7ffc559c7675",
-  "storageBucket": "elaborate-valor-f2t1j.firebasestorage.app",
-  "messagingSenderId": "193733254976",
-  "measurementId": "",
+  "projectId": "aeegis",
+  "appId": "1:724828564447:web:ff2cc4ccf869df3b6c726a",
+  "apiKey": "AIzaSyDyGgVwYXi2r9mwfGsp8JdDBocNoqhxlGo",
+  "authDomain": "aeegis.firebaseapp.com",
+  "firestoreDatabaseId": "aegis",
+  "storageBucket": "aeegis.firebasestorage.app",
+  "messagingSenderId": "724828564447",
+  "measurementId": "G-GSTPJS225S",
   "oAuthClientId": "193733254976-tqt5mkdrd2nou779oshkd2ghc80qgctv.apps.googleusercontent.com",
   "recaptchaSiteKey": ""
 }

@@ -51,7 +51,7 @@ export const QRModal: React.FC<QRModalProps> = ({ isOpen, onClose, onSuccessConn
       });
 
       QRCode.toCanvas(canvasRef.current, qrPayload, {
-        width: 260,
+        width: 300,
         margin: 2,
         errorCorrectionLevel: 'H',
         color: {
@@ -63,10 +63,13 @@ export const QRModal: React.FC<QRModalProps> = ({ isOpen, onClose, onSuccessConn
         if (!canvas) return;
         const ctx = canvas.getContext('2d');
         if (!ctx) return;
+        
+        ctx.imageSmoothingEnabled = true;
+        ctx.imageSmoothingQuality = 'high';
 
         // Draw centered circular badge with user profile avatar or Aegis logo
         const center = canvas.width / 2;
-        const badgeRadius = 26;
+        const badgeRadius = 26 * (300 / 260); // Scale badge radius proportionally
 
         // White circular background container
         ctx.beginPath();

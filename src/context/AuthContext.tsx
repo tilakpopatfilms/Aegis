@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useState, useEffect, ReactNode, useCallback } from 'react';
-import { doc, getDoc, setDoc, updateDoc, collection, getDocs, where, query } from 'firebase/firestore';
+import { doc, getDoc, setDoc, updateDoc, collection, getDocs, where, query, onSnapshot } from 'firebase/firestore';
 import { db } from '../firebase';
 import { UserProfile, AccountType, UserCredentials } from '../types';
 import {
@@ -237,6 +237,31 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
     initAuth();
   }, []);
+
+  // Real-time live synchronization of user's own profile across all devices/sessions
+  useEffect(() => {
+    if (!user?.uid) return;
+    const unsub = onSnapshot(
+      doc(db, 'public_profiles', user.uid),
+      (snap) => {
+        if (snap.exists()) {
+          const fresh = snap.data() as UserProfile;
+          setProfile((prev) => {
+            if (!prev) return fresh;
+            return {
+              ...prev,
+              ...fresh,
+            };
+          });
+          saveLocalProfile(fresh).catch(() => {});
+        }
+      },
+      (err) => {
+        console.warn('Real-time profile listener notice:', err);
+      }
+    );
+    return () => unsub();
+  }, [user?.uid]);
 
   // 100% Real Account Registration Flow
   const registerUser = async (data: RegisterData): Promise<string> => {

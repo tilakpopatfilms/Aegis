@@ -60,8 +60,8 @@ export const SearchView: React.FC<SearchViewProps> = ({ onSelectUser, onOpenQR }
         }
       });
 
-      // Limit results to maximum 5 as explicitly requested
-      setResults(matches.slice(0, 5));
+      // Limit results to maximum 10 as explicitly requested
+      setResults(matches.slice(0, 10));
     } catch (err: any) {
       console.warn('Search error:', err);
       setError('Search could not be completed.');
@@ -146,9 +146,9 @@ export const SearchView: React.FC<SearchViewProps> = ({ onSelectUser, onOpenQR }
       {hasSearched && (
         <div className="flex items-center justify-between text-xs text-neutral-500">
           <span>
-            {loading ? 'Searching live directory...' : `Found ${results.length} ${results.length === 1 ? 'account' : 'accounts'} (max 5)`}
+            {loading ? 'Searching live directory...' : `Found ${results.length} ${results.length === 1 ? 'account' : 'accounts'} (max 10)`}
           </span>
-          {results.length === 5 && (
+          {results.length === 10 && (
             <span className="text-[10px] text-neutral-400">
               Refine your query for more specific accounts
             </span>
