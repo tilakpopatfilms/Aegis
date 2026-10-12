@@ -54,13 +54,20 @@ const MainApp: React.FC = () => {
     return () => window.removeEventListener('popstate', handlePopState);
   }, []);
 
-  // Redirect unauthenticated user trying to access /chat, and prevent authenticated user accessing /login or /register
+  // Enforce strict route protection:
+  // 1. Unauthenticated users cannot access /chat or /profile, redirect to /home
+  // 2. Authenticated users cannot access /home, /, /login, or /register, redirect immediately to /chat
   useEffect(() => {
-    if (!loading && !user && (currentPath === '/chat' || currentPath === '/chats' || currentPath === '/')) {
-      navigate('/home');
-    }
-    if (!loading && user && (currentPath === '/login' || currentPath === '/register')) {
-      navigate('/chat');
+    if (!loading) {
+      if (!user) {
+        if (currentPath === '/chat' || currentPath === '/chats' || currentPath === '/profile' || currentPath === '/') {
+          navigate('/home');
+        }
+      } else {
+        if (currentPath === '/home' || currentPath === '/' || currentPath === '/login' || currentPath === '/register') {
+          navigate('/chat');
+        }
+      }
     }
   }, [loading, user, currentPath]);
 

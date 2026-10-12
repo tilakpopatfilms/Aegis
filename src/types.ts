@@ -79,6 +79,7 @@ export interface PlaintextMessageContent {
   text?: string;
   imageBlobUrl?: string; // Local Object URL for decrypted images
   imageBase64?: string;
+  images?: string[]; // Multiple images bundle (up to 5 images, WhatsApp style)
   fileName?: string;
   voiceAudioBase64?: string; // Base64 encoded audio for WhatsApp-style voice messages
   voiceDurationSeconds?: number; // Duration in seconds

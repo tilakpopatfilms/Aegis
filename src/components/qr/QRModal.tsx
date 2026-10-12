@@ -51,18 +51,63 @@ export const QRModal: React.FC<QRModalProps> = ({ isOpen, onClose, onSuccessConn
       });
 
       QRCode.toCanvas(canvasRef.current, qrPayload, {
-        width: 240,
+        width: 260,
         margin: 2,
+        errorCorrectionLevel: 'H',
         color: {
           dark: '#000000',
           light: '#FFFFFF',
         },
       }).then(() => {
-        try {
-          if (canvasRef.current) {
-            localStorage.setItem(`aegis_qr_${profile.uid}`, canvasRef.current.toDataURL());
-          }
-        } catch (e) {}
+        const canvas = canvasRef.current;
+        if (!canvas) return;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) return;
+
+        // Draw centered circular badge with user profile avatar or Aegis logo
+        const center = canvas.width / 2;
+        const badgeRadius = 26;
+
+        // White circular background container
+        ctx.beginPath();
+        ctx.arc(center, center, badgeRadius + 3, 0, Math.PI * 2);
+        ctx.fillStyle = '#FFFFFF';
+        ctx.fill();
+        ctx.lineWidth = 2.5;
+        ctx.strokeStyle = '#00a884';
+        ctx.stroke();
+
+        // Load and draw user's profile image or Aegis logo in center
+        const img = new Image();
+        img.crossOrigin = 'anonymous';
+        img.onload = () => {
+          ctx.save();
+          ctx.beginPath();
+          ctx.arc(center, center, badgeRadius, 0, Math.PI * 2);
+          ctx.clip();
+          ctx.drawImage(img, center - badgeRadius, center - badgeRadius, badgeRadius * 2, badgeRadius * 2);
+          ctx.restore();
+
+          try {
+            localStorage.setItem(`aegis_qr_${profile.uid}`, canvas.toDataURL());
+          } catch (e) {}
+        };
+        img.onerror = () => {
+          // Fallback to Aegis logo
+          const logoImg = new Image();
+          logoImg.src = '/pwa-maskable-512x512.png';
+          logoImg.onload = () => {
+            ctx.save();
+            ctx.beginPath();
+            ctx.arc(center, center, badgeRadius, 0, Math.PI * 2);
+            ctx.clip();
+            ctx.drawImage(logoImg, center - badgeRadius, center - badgeRadius, badgeRadius * 2, badgeRadius * 2);
+            ctx.restore();
+          };
+        };
+        img.src = profile.photoURL && !profile.photoURL.startsWith('data:image/svg+xml')
+          ? profile.photoURL
+          : '/pwa-maskable-512x512.png';
       }).catch((err) => console.error('QR Render Error:', err));
     }
   }, [isOpen, activeTab, profile]);
@@ -316,14 +361,49 @@ export const QRModal: React.FC<QRModalProps> = ({ isOpen, onClose, onSuccessConn
         {/* My QR Section */}
         {activeTab === 'myQr' && (
           <div className="flex flex-col items-center space-y-4">
-            <div className="p-4 bg-white rounded-3xl shadow-xs border border-neutral-200">
+            {/* User Profile Header Card with Aegis Logo */}
+            <div className="flex items-center space-x-3 w-full bg-neutral-50 dark:bg-[#18181b] p-3 rounded-2xl border border-neutral-200 dark:border-neutral-800">
+              <div className="relative shrink-0">
+                {profile?.photoURL && !profile.photoURL.startsWith('data:image/svg+xml') ? (
+                  <img
+                    src={profile.photoURL}
+                    alt={profile.fullName}
+                    className="w-12 h-12 rounded-full object-cover border-2 border-[#00a884] shadow-xs"
+                  />
+                ) : (
+                  <div className="w-12 h-12 rounded-full bg-neutral-900 dark:bg-white text-white dark:text-neutral-900 flex items-center justify-center font-bold text-sm border-2 border-[#00a884]">
+                    {profile?.fullName?.slice(0, 2).toUpperCase() || 'U'}
+                  </div>
+                )}
+                {/* Aegis Mini Logo Overlay */}
+                <img
+                  src="/pwa-maskable-512x512.png"
+                  alt="Aegis"
+                  className="w-5 h-5 rounded-full absolute -bottom-1 -right-1 bg-white p-0.5 shadow-sm border border-neutral-200"
+                />
+              </div>
+              <div className="min-w-0 flex-1 text-left">
+                <div className="flex items-center space-x-1.5">
+                  <h4 className="font-bold text-sm text-neutral-900 dark:text-white truncate">
+                    {profile?.fullName}
+                  </h4>
+                  <span className="text-[10px] bg-[#00a884]/10 text-[#00a884] px-1.5 py-0.5 rounded-full font-bold">
+                    Aegis ID
+                  </span>
+                </div>
+                <p className="text-xs text-neutral-500 font-mono truncate">
+                  @{profile?.username}
+                </p>
+              </div>
+            </div>
+
+            <div className="p-4 bg-white rounded-3xl shadow-md border border-neutral-200">
               <canvas ref={canvasRef} className="rounded-xl" />
             </div>
 
             <div className="text-center space-y-1">
-              <h3 className="font-bold text-sm">@{profile?.username}</h3>
               <p className="text-xs text-neutral-500 dark:text-neutral-400 max-w-xs">
-                Scan with any Aegis client to establish an encrypted conversation without sharing phone numbers.
+                Scan with any Aegis client or camera to connect instantly.
               </p>
             </div>
 

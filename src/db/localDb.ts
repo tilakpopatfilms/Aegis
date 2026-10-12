@@ -209,6 +209,35 @@ export async function deleteLocalConversation(id: string): Promise<void> {
   }
 }
 
+// Pinned Conversations Persistence (Dual: localStorage + IndexedDB)
+export function getPinnedConversationIds(): Set<string> {
+  const set = new Set<string>();
+  try {
+    const raw = localStorage.getItem('aegis_pinned_convs') || '[]';
+    const arr: string[] = JSON.parse(raw);
+    arr.forEach((id) => set.add(id));
+  } catch (e) {}
+  return set;
+}
+
+export function setConversationPinned(id: string, pinned: boolean): void {
+  try {
+    const raw = localStorage.getItem('aegis_pinned_convs') || '[]';
+    const arr: string[] = JSON.parse(raw);
+    const set = new Set(arr);
+    if (pinned) {
+      set.add(id);
+    } else {
+      set.delete(id);
+    }
+    localStorage.setItem('aegis_pinned_convs', JSON.stringify(Array.from(set)));
+  } catch (e) {}
+}
+
+export function isConversationPinned(id: string): boolean {
+  return getPinnedConversationIds().has(id);
+}
+
 // Key Store API (Dual Persistence: IndexedDB + localStorage fallback)
 export async function saveKeyStoreItem(id: string, data: string, iv?: string, salt?: string): Promise<void> {
   const item = { id, data, iv, salt };

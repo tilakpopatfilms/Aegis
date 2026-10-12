@@ -1,6 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
 import {
-  Shield,
   Send,
   Paperclip,
   X,
@@ -11,21 +10,24 @@ import {
   MoreVertical,
   Copy,
   ArrowLeft,
-  ShieldCheck,
   Link as LinkIcon,
   Download,
   Smile,
   Pin,
   Mic,
   Lock,
+  Image as ImageIcon,
+  Layers,
+  Plus,
+  ChevronLeft,
+  ChevronRight,
 } from 'lucide-react';
 import { doc, onSnapshot } from 'firebase/firestore';
 import { db } from '../../firebase';
 import { useAuth } from '../../context/AuthContext';
 import { useChat } from '../../context/ChatContext';
 import { DecryptedMessage, UserProfile } from '../../types';
-import { generateSafetyNumber } from '../../crypto/crypto';
-import { saveSafetyNumber, getSafetyNumber, saveLocalProfile } from '../../db/localDb';
+import { saveLocalProfile } from '../../db/localDb';
 import { VoiceAudioPlayer } from './VoiceAudioPlayer';
 
 const PRIMARY_EMOJIS = ['👍', '❤️', '😂', '😮', '😢', '🙏'];
@@ -72,6 +74,7 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({ onBack }) => {
     messages,
     sendTextMessage,
     sendImageMessage,
+    sendImageBundleMessage,
     sendVoiceMessage,
     deleteMessageLocally,
     deleteMessagesLocally,
@@ -83,20 +86,23 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({ onBack }) => {
   const [textInput, setTextInput] = useState('');
   const [replyingTo, setReplyingTo] = useState<DecryptedMessage | null>(null);
 
-  // Multi-select & Single-select state (Activated ONLY on holding a message)
+  // WhatsApp-style Image Bundle Selection State (Max 5 images preview upper input bar)
+  const [pendingImages, setPendingImages] = useState<{ file: File; previewUrl: string }[]>([]);
+
+  // Reply scroll highlight state
+  const [highlightedMessageId, setHighlightedMessageId] = useState<string | null>(null);
+
+  // Multi-select & Single-select state (Activated ONLY on holding a message or full row)
   const [selectedMessageIds, setSelectedMessageIds] = useState<Set<string>>(new Set());
   const [showEmojiDrawer, setShowEmojiDrawer] = useState<boolean>(false);
 
   // Live peer profile state for instant real-time sync when other user updates name/photo
   const [liveOtherUser, setLiveOtherUser] = useState<UserProfile | null>(null);
 
-  // Modals & Panels
-  const [showSafetyModal, setShowSafetyModal] = useState(false);
-  const [safetyFingerprint, setSafetyFingerprint] = useState('');
-  const [isVerified, setIsVerified] = useState(false);
-
   const [showOptionsMenu, setShowOptionsMenu] = useState(false);
   const [selectedImageFull, setSelectedImageFull] = useState<string | null>(null);
+  const [selectedBundleFull, setSelectedBundleFull] = useState<string[] | null>(null);
+  const [bundleViewerIndex, setBundleViewerIndex] = useState<number>(0);
   const [copiedLinkNotice, setCopiedLinkNotice] = useState(false);
   const [copiedNotice, setCopiedNotice] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
@@ -109,9 +115,13 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({ onBack }) => {
   const suppressClickUntilRef = useRef<number>(0);
   const [swipeOffsets, setSwipeOffsets] = useState<Record<string, number>>({});
 
+  const messagesContainerRef = useRef<HTMLDivElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+
+  // Reaction Bar collision prevention state
+  const [flipReactionBelow, setFlipReactionBelow] = useState(false);
 
   // WhatsApp-style Voice Recording State & Refs
   const [isRecording, setIsRecording] = useState(false);
@@ -120,6 +130,22 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({ onBack }) => {
   const audioChunksRef = useRef<Blob[]>([]);
   const recordingTimerRef = useRef<any>(null);
   const audioStreamRef = useRef<MediaStream | null>(null);
+
+  // Keyboard navigation for image bundle viewer
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (!selectedBundleFull || selectedBundleFull.length === 0) return;
+      if (e.key === 'Escape') {
+        setSelectedBundleFull(null);
+      } else if (e.key === 'ArrowLeft') {
+        setBundleViewerIndex((prev) => (prev > 0 ? prev - 1 : selectedBundleFull.length - 1));
+      } else if (e.key === 'ArrowRight') {
+        setBundleViewerIndex((prev) => (prev < selectedBundleFull.length - 1 ? prev + 1 : 0));
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [selectedBundleFull]);
 
   // Clean up timers & media stream on unmount
   useEffect(() => {
@@ -162,26 +188,34 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({ onBack }) => {
     return () => unsub();
   }, [user, selectedConversation?.id]);
 
-  // Load Safety Fingerprint
+
+  const isSelectMode = selectedMessageIds.size > 0;
+  const isSingleSelect = selectedMessageIds.size === 1;
+  const singleSelectedMsg = isSingleSelect
+    ? messages.find((m) => selectedMessageIds.has(m.id)) || null
+    : null;
+
+  // Collision detection: If selected message is near top of chat, flip reaction bar below bubble
   useEffect(() => {
-    if (!profile || !selectedConversation?.otherUser) return;
-
-    const loadSafety = async () => {
-      const activeOther = liveOtherUser || selectedConversation.otherUser;
-      const otherPubKey = activeOther?.publicKey || profile.publicKey;
-      const fingerprint = await generateSafetyNumber(profile.publicKey, otherPubKey);
-      setSafetyFingerprint(fingerprint);
-
-      if (activeOther?.uid) {
-        const stored = await getSafetyNumber(activeOther.uid);
-        if (stored) {
-          setIsVerified(stored.verified);
+    if (singleSelectedMsg) {
+      const el = document.getElementById(`msg-row-${singleSelectedMsg.id}`);
+      const container = messagesContainerRef.current;
+      if (el && container) {
+        const elRect = el.getBoundingClientRect();
+        const contRect = container.getBoundingClientRect();
+        const distFromTop = elRect.top - contRect.top;
+        if (distFromTop < 65) {
+          setFlipReactionBelow(true);
+        } else {
+          setFlipReactionBelow(false);
         }
+      } else {
+        setFlipReactionBelow(false);
       }
-    };
-
-    loadSafety();
-  }, [profile, selectedConversation, liveOtherUser]);
+    } else {
+      setFlipReactionBelow(false);
+    }
+  }, [singleSelectedMsg?.id]);
 
   // Early return placeholder if no chat selected (MUST be after all hooks!)
   if (!selectedConversation) {
@@ -208,12 +242,6 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({ onBack }) => {
     publicKey: '',
     createdAt: new Date().toISOString(),
   };
-
-  const isSelectMode = selectedMessageIds.size > 0;
-  const isSingleSelect = selectedMessageIds.size === 1;
-  const singleSelectedMsg = isSingleSelect
-    ? messages.find((m) => selectedMessageIds.has(m.id)) || null
-    : null;
 
   const toggleSelectMessage = (msgId: string) => {
     setSelectedMessageIds((prev) => {
@@ -242,20 +270,30 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({ onBack }) => {
 
   const handleSendText = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
-    if (!textInput.trim() || sending) return;
+    if ((!textInput.trim() && pendingImages.length === 0) || sending) return;
 
-    const textToSend = textInput.trim();
-    setTextInput('');
     setSendError(null);
-    const replyId = replyingTo?.id;
-    setReplyingTo(null);
-
     setSending(true);
+
     try {
-      await sendTextMessage(textToSend, replyId);
+      // If user has selected images, send as WhatsApp image bundle with caption text
+      if (pendingImages.length > 0) {
+        const files = pendingImages.map((p) => p.file);
+        const caption = textInput.trim();
+        setTextInput('');
+        // Clean up preview URLs
+        pendingImages.forEach((p) => URL.revokeObjectURL(p.previewUrl));
+        setPendingImages([]);
+        await sendImageBundleMessage(files, caption);
+      } else {
+        const textToSend = textInput.trim();
+        setTextInput('');
+        const replyId = replyingTo?.id;
+        setReplyingTo(null);
+        await sendTextMessage(textToSend, replyId);
+      }
     } catch (err: any) {
-      console.warn('Failed to send text message:', err);
-      setTextInput(textToSend);
+      console.warn('Failed to send message:', err);
       setSendError(err.message || 'Failed to send message. Please retry.');
     } finally {
       setSending(false);
@@ -263,17 +301,37 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({ onBack }) => {
     }
   };
 
-  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files && e.target.files[0]) {
-      const file = e.target.files[0];
-      setSendError(null);
-      try {
-        await sendImageMessage(file);
-      } catch (err: any) {
-        console.warn('Failed to send image message:', err);
-        setSendError(err.message || 'Failed to send image.');
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files && e.target.files.length > 0) {
+      const selectedFiles = Array.from(e.target.files);
+      const remainingSlots = 5 - pendingImages.length;
+      if (remainingSlots <= 0) {
+        setSendError('Maximum 5 images allowed in a bundle.');
+        return;
       }
+
+      const filesToAdd = selectedFiles.slice(0, remainingSlots);
+      if (selectedFiles.length > remainingSlots) {
+        setSendError(`Maximum 5 images bundle. Added ${remainingSlots} images.`);
+      }
+
+      const newPending = filesToAdd.map((file) => ({
+        file,
+        previewUrl: URL.createObjectURL(file),
+      }));
+
+      setPendingImages((prev) => [...prev, ...newPending]);
+      // Reset input value so user can select again if needed
+      e.target.value = '';
     }
+  };
+
+  const removePendingImage = (index: number) => {
+    setPendingImages((prev) => {
+      const target = prev[index];
+      if (target) URL.revokeObjectURL(target.previewUrl);
+      return prev.filter((_, i) => i !== index);
+    });
   };
 
   const startVoiceRecording = async () => {
@@ -511,15 +569,15 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({ onBack }) => {
     setShowOptionsMenu(false);
   };
 
-  const toggleSafetyVerification = async () => {
-    const nextState = !isVerified;
-    setIsVerified(nextState);
-    await saveSafetyNumber({
-      contactUid: otherUser.uid,
-      fingerprint: safetyFingerprint,
-      verified: nextState,
-      verifiedAt: new Date().toISOString(),
-    });
+  const scrollToMessage = (msgId: string) => {
+    const el = document.getElementById(`msg-row-${msgId}`);
+    if (el) {
+      el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      setHighlightedMessageId(msgId);
+      setTimeout(() => {
+        setHighlightedMessageId((current) => (current === msgId ? null : current));
+      }, 2200);
+    }
   };
 
   const otherInitials = otherUser.fullName
@@ -637,8 +695,7 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({ onBack }) => {
             )}
 
             <div
-              className="flex items-center space-x-2.5 sm:space-x-3 cursor-pointer min-w-0 flex-1"
-              onClick={() => setShowSafetyModal(true)}
+              className="flex items-center space-x-2.5 sm:space-x-3 min-w-0 flex-1"
             >
               <div className="relative shrink-0">
                 {hasOtherPhoto ? (
@@ -660,11 +717,6 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({ onBack }) => {
                   <h3 className="font-semibold text-xs sm:text-sm text-[#e9edef] truncate">
                     {otherUser.fullName}
                   </h3>
-                  {isVerified && (
-                    <span title="Safety Number Verified">
-                      <ShieldCheck className="w-3.5 h-3.5 text-[#00a884] shrink-0" />
-                    </span>
-                  )}
                 </div>
                 <p className="text-[10px] sm:text-[11px] text-[#8696a0] truncate">
                   @{otherUser.username}
@@ -675,15 +727,6 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({ onBack }) => {
 
           {/* Top Right Action Icons */}
           <div className="flex items-center space-x-1 text-[#8696a0] shrink-0 ml-1">
-            {/* Safety Number Shield Button */}
-            <button
-              onClick={() => setShowSafetyModal(true)}
-              className="p-1.5 sm:p-2 hover:text-[#e9edef] hover:bg-[#2a3942] rounded-xl transition-colors"
-              title="Verify Safety Number"
-            >
-              <Shield className="w-4 h-4" />
-            </button>
-
             {/* Options Menu */}
             <button
               onClick={() => setShowOptionsMenu(!showOptionsMenu)}
@@ -720,16 +763,6 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({ onBack }) => {
 
           <div className="py-1">
             <button
-              onClick={() => {
-                setShowOptionsMenu(false);
-                setShowSafetyModal(true);
-              }}
-              className="w-full text-left px-3 py-2 rounded-xl hover:bg-[#2a3942] flex items-center space-x-2 transition-colors"
-            >
-              <Shield className="w-3.5 h-3.5" />
-              <span>Verify Safety Fingerprint</span>
-            </button>
-            <button
               onClick={handleCopyContactLink}
               className="w-full text-left px-3 py-2 rounded-xl hover:bg-[#2a3942] flex items-center space-x-2 transition-colors"
             >
@@ -760,19 +793,50 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({ onBack }) => {
       )}
 
       {/* Main Messages Scroll Area (WhatsApp-grade Wallpaper & Screen Fitting) */}
-      <div className="flex-1 overflow-y-auto overflow-x-hidden p-2.5 sm:p-4 space-y-2.5 min-h-0 w-full max-w-full bg-[#0b141a] bg-[radial-gradient(#182229_1px,transparent_1px)] [background-size:18px_18px]">
+      <div
+        ref={messagesContainerRef}
+        className="flex-1 overflow-y-auto overflow-x-hidden p-2.5 sm:p-4 pt-6 space-y-2.5 min-h-0 w-full max-w-full bg-[#0b141a] bg-[radial-gradient(#182229_1px,transparent_1px)] [background-size:18px_18px]"
+      >
 
         {/* Message Thread */}
-        {messages.map((m) => {
+        {messages.map((m, msgIdx) => {
           const isSender = m.senderUid === user?.uid;
           const replyParent = m.replyToId ? messages.find((p) => p.id === m.replyToId) : null;
           const swipeOffset = swipeOffsets[m.id] || 0;
           const isSelected = selectedMessageIds.has(m.id);
+          const isNearTop = flipReactionBelow || msgIdx <= 1;
 
           return (
             <div
               key={m.id}
-              className={`group relative flex flex-col ${isSender ? 'items-end' : 'items-start'} space-y-1 w-full max-w-full`}
+              id={`msg-row-${m.id}`}
+              onClick={(e) => {
+                if (isSelectMode) {
+                  e.stopPropagation();
+                  toggleSelectMessage(m.id);
+                }
+              }}
+              onMouseDown={(e) => handleMouseDown(m, e)}
+              onMouseUp={handleMouseUp}
+              onTouchStart={(e) => handleTouchStart(m, e)}
+              onTouchMove={(e) => handleTouchMove(m.id, e)}
+              onTouchEnd={(e) => handleTouchEnd(m, e)}
+              onContextMenu={(e) => {
+                e.preventDefault();
+                suppressClickUntilRef.current = Date.now() + 650;
+                setSelectedMessageIds((prev) => {
+                  const next = new Set(prev);
+                  next.add(m.id);
+                  return next;
+                });
+              }}
+              className={`group relative flex flex-col ${isSender ? 'items-end' : 'items-start'} space-y-1 w-full max-w-full -mx-2.5 sm:-mx-4 px-2.5 sm:px-4 py-1.5 transition-colors duration-300 ${
+                highlightedMessageId === m.id
+                  ? 'bg-[#00a884]/25 ring-y ring-1 ring-[#00a884]/40 shadow-inner'
+                  : isSelected
+                  ? 'bg-[#202c33]/80'
+                  : 'hover:bg-white/[0.015]'
+              }`}
             >
               {/* Swipe to reply sliding indicator */}
               {swipeOffset > 8 && !isSelectMode && (
@@ -787,13 +851,13 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({ onBack }) => {
                 </div>
               )}
 
-              {/* Reaction Bar (Floating above bubble ONLY when EXACTLY 1 message is selected) */}
+              {/* Reaction Bar (Floating above or below bubble, NEVER cut by top header!) */}
               {isSingleSelect && singleSelectedMsg?.id === m.id && (
                 <div
                   onClick={(e) => e.stopPropagation()}
-                  className={`absolute -top-11 z-40 flex items-center space-x-1 p-1 bg-[#202c33] border border-[#2a3942] rounded-full shadow-2xl animate-in zoom-in-95 duration-150 backdrop-blur-md ${
-                    isSender ? 'right-0' : 'left-0'
-                  }`}
+                  className={`absolute z-50 flex items-center space-x-1 p-1 bg-[#202c33] border border-[#2a3942] rounded-full shadow-2xl animate-in zoom-in-95 duration-150 backdrop-blur-md ${
+                    isNearTop ? 'top-[calc(100%+8px)]' : '-top-12'
+                  } ${isSender ? 'right-2 sm:right-4' : 'left-2 sm:left-4'}`}
                 >
                   {PRIMARY_EMOJIS.map((emoji) => (
                     <button
@@ -823,21 +887,6 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({ onBack }) => {
               {/* Message Bubble Container */}
               <div
                 onClick={(e) => handleMessageBubbleClick(m, e)}
-                onContextMenu={(e) => {
-                  e.preventDefault();
-                  e.stopPropagation();
-                  suppressClickUntilRef.current = Date.now() + 650;
-                  setSelectedMessageIds((prev) => {
-                    const next = new Set(prev);
-                    next.add(m.id);
-                    return next;
-                  });
-                }}
-                onMouseDown={(e) => handleMouseDown(m, e)}
-                onMouseUp={handleMouseUp}
-                onTouchStart={(e) => handleTouchStart(m, e)}
-                onTouchMove={(e) => handleTouchMove(m.id, e)}
-                onTouchEnd={(e) => handleTouchEnd(m, e)}
                 style={{
                   transform: swipeOffset > 0 ? `translateX(${swipeOffset}px)` : undefined,
                   transition: swipeOffset === 0 ? 'transform 0.2s cubic-bezier(0.2, 0, 0, 1)' : undefined,
@@ -850,41 +899,137 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({ onBack }) => {
                     : 'bg-[#202c33] text-[#e9edef] rounded-tl-xs border border-[#2a3942]/60'
                 }`}
               >
-                {/* Reply Citation */}
+                {/* Reply Citation (Clicking scrolls smoothly to parent message and highlights horizontal line!) */}
                 {replyParent && (
                   <div
-                    className={`mb-1.5 p-2 rounded-lg border-l-3 text-[11px] ${
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      scrollToMessage(replyParent.id);
+                    }}
+                    className={`mb-1.5 p-2 rounded-lg border-l-4 text-[11px] cursor-pointer hover:opacity-90 active:scale-[0.99] transition-all select-none ${
                       isSender
                         ? 'bg-[#025144] border-[#25d366] text-[#e9edef]/90'
                         : 'bg-[#111b21] border-[#00a884] text-[#e9edef]/90'
                     }`}
+                    title="Click to jump to replied message"
                   >
-                    <p className="font-semibold text-[10px] text-[#25d366]">
-                      {replyParent.senderUid === user?.uid ? 'You' : otherUser.fullName}
+                    <p className="font-semibold text-[10px] text-[#25d366] flex items-center space-x-1">
+                      <span>{replyParent.senderUid === user?.uid ? 'You' : otherUser.fullName}</span>
+                      <CornerDownRight className="w-3 h-3 text-[#25d366] inline" />
                     </p>
                     <p className="truncate">
-                      {replyParent.content.text || (replyParent.content.imageBase64 ? 'Photo' : 'Voice note')}
+                      {replyParent.content.text ||
+                        (replyParent.content.images && replyParent.content.images.length > 0
+                          ? `📷 ${replyParent.content.images.length} Photos`
+                          : replyParent.content.imageBase64
+                          ? 'Photo'
+                          : 'Voice note')}
                     </p>
                   </div>
                 )}
 
-                {/* Attached Image */}
-                {m.content.imageBase64 && (
+                {/* WhatsApp-style Multiple Images Bundle (up to 5 images) */}
+                {m.content.images && m.content.images.length > 1 ? (
+                  <div className="mb-1 rounded-xl overflow-hidden min-w-0">
+                    <div
+                      className={`grid gap-1 ${
+                        m.content.images.length === 2
+                          ? 'grid-cols-2'
+                          : m.content.images.length === 3
+                          ? 'grid-cols-2'
+                          : 'grid-cols-2'
+                      }`}
+                    >
+                      {m.content.images.slice(0, 4).map((imgUrl, idx) => {
+                        const totalCount = m.content.images!.length;
+                        const isFourthAndMore = idx === 3 && totalCount > 4;
+                        const extraCount = totalCount - 3; // +1, +2 etc
+
+                        return (
+                          <div
+                            key={idx}
+                            onClick={(e) => {
+                              if (!isSelectMode) {
+                                e.stopPropagation();
+                                setSelectedBundleFull(m.content.images!);
+                                setBundleViewerIndex(idx);
+                              }
+                            }}
+                            className={`relative overflow-hidden rounded-lg cursor-pointer group/thumb bg-black/40 ${
+                              m.content.images!.length === 3 && idx === 0 ? 'col-span-2 max-h-40' : 'h-28 sm:h-32'
+                            }`}
+                          >
+                            <img
+                              src={imgUrl}
+                              alt={`Photo ${idx + 1}`}
+                              className="w-full h-full object-cover hover:scale-105 transition-transform duration-200"
+                            />
+                            {/* WhatsApp-style "+1", "+2" overlay on last thumbnail */}
+                            {isFourthAndMore && (
+                              <div className="absolute inset-0 bg-black/65 backdrop-blur-[1px] flex flex-col items-center justify-center text-white font-extrabold text-lg sm:text-xl">
+                                <span>+{extraCount}</span>
+                                <span className="text-[10px] font-normal text-white/80">photos</span>
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+
+                    {/* Download Whole Bundle Button */}
+                    <div className="mt-1 flex items-center justify-between px-0.5">
+                      <span className="text-[11px] font-semibold text-[#8696a0] flex items-center space-x-1">
+                        <Layers className="w-3.5 h-3.5 text-[#00a884]" />
+                        <span>{m.content.images.length} Photos Bundle</span>
+                      </span>
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          m.content.images?.forEach((url, i) => {
+                            setTimeout(() => {
+                              const a = document.createElement('a');
+                              a.href = url;
+                              a.download = `aegis_bundle_${Date.now()}_${i + 1}.jpg`;
+                              document.body.appendChild(a);
+                              a.click();
+                              document.body.removeChild(a);
+                            }, i * 200);
+                          });
+                          setCopiedNotice(`Downloading ${m.content.images?.length || 0} photos...`);
+                          setTimeout(() => setCopiedNotice(null), 2500);
+                        }}
+                        className="px-2 py-0.5 bg-black/60 hover:bg-black text-white text-[10px] font-bold rounded-md flex items-center space-x-1 border border-white/10 transition-colors"
+                        title="Download whole bundle"
+                      >
+                        <Download className="w-3 h-3" />
+                        <span>Download All</span>
+                      </button>
+                    </div>
+                  </div>
+                ) : m.content.imageBase64 || (m.content.images && m.content.images.length === 1) ? (
+                  /* Single Attached Image */
                   <div className="relative mb-1 rounded-xl overflow-hidden group/img min-w-0">
                     <img
-                      src={m.content.imageBase64}
+                      src={m.content.images?.[0] || m.content.imageBase64}
                       alt={m.content.fileName || 'Attachment'}
                       onClick={(e) => {
                         if (!isSelectMode) {
                           e.stopPropagation();
-                          setSelectedImageFull(m.content.imageBase64!);
+                          setSelectedImageFull(m.content.images?.[0] || m.content.imageBase64!);
                         }
                       }}
                       className="max-h-60 sm:max-h-64 w-full rounded-xl object-cover hover:opacity-95 transition-opacity cursor-pointer border border-[#2a3942]"
                     />
                     <button
                       type="button"
-                      onClick={(e) => handleDownloadImage(e, m.content.imageBase64!, m.content.fileName)}
+                      onClick={(e) =>
+                        handleDownloadImage(
+                          e,
+                          m.content.images?.[0] || m.content.imageBase64!,
+                          m.content.fileName
+                        )
+                      }
                       className="absolute bottom-2 right-2 px-2 py-1 bg-black/80 hover:bg-black text-white rounded-lg backdrop-blur-xs flex items-center space-x-1.5 text-[10px] shadow-md border border-white/10 transition-colors"
                       title="Download image"
                     >
@@ -892,7 +1037,7 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({ onBack }) => {
                       <span className="font-semibold text-[10px]">Save</span>
                     </button>
                   </div>
-                )}
+                ) : null}
 
                 {/* Voice Audio Message Player (WhatsApp style) */}
                 {m.content.voiceAudioBase64 && (
@@ -905,7 +1050,7 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({ onBack }) => {
                   </div>
                 )}
 
-                {/* Plaintext Content */}
+                {/* Plaintext Content / Caption */}
                 {m.content.text && (
                   <p className="whitespace-pre-wrap break-words leading-relaxed select-text pr-1 min-w-0">
                     {m.content.text}
@@ -1034,6 +1179,64 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({ onBack }) => {
         </div>
       )}
 
+      {/* WhatsApp-style Pending Image Bundle Preview (Upper Text Bar) */}
+      {pendingImages.length > 0 && (
+        <div className="px-3 sm:px-4 py-2 bg-[#182229] border-t border-[#2a3942] z-20 w-full max-w-full min-w-0">
+          <div className="flex items-center justify-between mb-1.5 text-xs">
+            <span className="font-semibold text-[#00a884] flex items-center space-x-1.5">
+              <ImageIcon className="w-4 h-4" />
+              <span>{pendingImages.length} of 5 photos selected</span>
+            </span>
+            <button
+              type="button"
+              onClick={() => {
+                pendingImages.forEach((p) => URL.revokeObjectURL(p.previewUrl));
+                setPendingImages([]);
+              }}
+              className="text-xs text-[#8696a0] hover:text-rose-400"
+            >
+              Clear all
+            </button>
+          </div>
+
+          <div className="flex items-center space-x-2 overflow-x-auto pb-1">
+            {pendingImages.map((img, idx) => (
+              <div key={idx} className="relative shrink-0 group rounded-xl overflow-hidden border border-[#2a3942]">
+                <img
+                  src={img.previewUrl}
+                  alt={`Preview ${idx + 1}`}
+                  className="w-14 h-14 sm:w-16 sm:h-16 object-cover"
+                />
+                <button
+                  type="button"
+                  onClick={() => removePendingImage(idx)}
+                  className="absolute top-1 right-1 p-0.5 bg-black/70 hover:bg-black text-white rounded-full transition-colors"
+                  title="Remove photo"
+                >
+                  <X className="w-3 h-3" />
+                </button>
+                <span className="absolute bottom-1 left-1 text-[9px] font-bold bg-black/60 text-white px-1 rounded">
+                  {idx + 1}
+                </span>
+              </div>
+            ))}
+
+            {/* Add More Button if under 5 photos */}
+            {pendingImages.length < 5 && (
+              <button
+                type="button"
+                onClick={() => fileInputRef.current?.click()}
+                className="w-14 h-14 sm:w-16 sm:h-16 rounded-xl border border-dashed border-[#2a3942] hover:border-[#00a884] flex flex-col items-center justify-center text-[#8696a0] hover:text-[#00a884] shrink-0 transition-colors"
+                title="Add another photo (up to 5)"
+              >
+                <Plus className="w-5 h-5" />
+                <span className="text-[9px]">Add</span>
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* Bottom Input Area (WhatsApp style, 100% Responsive) */}
       {isRecording ? (
         <div className="p-2.5 sm:p-3 bg-[#202c33] border-t border-[#2a3942] flex items-center justify-between shrink-0 z-20 animate-in fade-in w-full max-w-full min-w-0">
@@ -1078,6 +1281,7 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({ onBack }) => {
             type="file"
             ref={fileInputRef}
             accept="image/*"
+            multiple
             onChange={handleFileChange}
             className="hidden"
           />
@@ -1085,8 +1289,12 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({ onBack }) => {
           <button
             type="button"
             onClick={() => fileInputRef.current?.click()}
-            className="p-2 text-[#8696a0] hover:text-[#e9edef] hover:bg-[#2a3942] rounded-full transition-colors shrink-0"
-            title="Attach Encrypted Photo"
+            className={`p-2 rounded-full transition-colors shrink-0 ${
+              pendingImages.length > 0
+                ? 'text-[#00a884] bg-[#00a884]/20'
+                : 'text-[#8696a0] hover:text-[#e9edef] hover:bg-[#2a3942]'
+            }`}
+            title="Attach Photos (up to 5)"
           >
             <Paperclip className="w-5 h-5" />
           </button>
@@ -1096,16 +1304,16 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({ onBack }) => {
             type="text"
             value={textInput}
             onChange={(e) => setTextInput(e.target.value)}
-            placeholder="Type a message..."
+            placeholder={pendingImages.length > 0 ? "Add a caption for photos..." : "Type a message..."}
             className="flex-1 min-w-0 px-3.5 py-2.5 bg-[#2a3942] rounded-2xl text-xs sm:text-sm text-[#e9edef] placeholder-[#8696a0] border-none focus:outline-none transition-colors"
           />
 
-          {textInput.trim() ? (
+          {textInput.trim() || pendingImages.length > 0 ? (
             <button
               type="submit"
-              disabled={!textInput.trim() || sending}
+              disabled={(!textInput.trim() && pendingImages.length === 0) || sending}
               className="p-2.5 bg-[#00a884] hover:bg-[#009272] text-white rounded-full transition-colors disabled:opacity-40 shrink-0 shadow-md"
-              title="Send"
+              title={pendingImages.length > 0 ? `Send ${pendingImages.length} photo bundle` : "Send"}
             >
               <Send className="w-4 h-4" />
             </button>
@@ -1122,43 +1330,6 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({ onBack }) => {
         </form>
       )}
 
-      {/* Modal: Safety Number Verification */}
-      {showSafetyModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
-          <div className="relative w-full max-w-md bg-[#202c33] rounded-3xl shadow-2xl border border-[#2a3942] p-6 sm:p-8 text-center space-y-4 text-[#e9edef]">
-            <button
-              onClick={() => setShowSafetyModal(false)}
-              className="absolute top-4 right-4 p-2 text-[#8696a0] hover:text-[#e9edef] rounded-full"
-            >
-              <X className="w-5 h-5" />
-            </button>
-
-            <div className="w-12 h-12 rounded-full bg-[#111b21] text-[#00a884] flex items-center justify-center mx-auto border border-[#2a3942]">
-              <ShieldCheck className="w-6 h-6" />
-            </div>
-
-            <h3 className="text-xl font-bold tracking-tight">Verify Safety Fingerprint</h3>
-            <p className="text-xs text-[#8696a0]">
-              Compare this fingerprint with {otherUser.fullName} (@{otherUser.username}) to confirm end-to-end encryption integrity.
-            </p>
-
-            <div className="p-4 bg-[#111b21] rounded-2xl border border-[#2a3942] font-mono text-xs sm:text-sm tracking-wider text-[#e9edef] whitespace-pre-line leading-relaxed select-all">
-              {safetyFingerprint}
-            </div>
-
-            <button
-              onClick={toggleSafetyVerification}
-              className={`w-full py-2.5 font-bold rounded-xl transition-all text-xs ${
-                isVerified
-                  ? 'bg-[#2a3942] text-[#8696a0]'
-                  : 'bg-[#00a884] hover:bg-[#009272] text-white shadow-md'
-              }`}
-            >
-              {isVerified ? 'Mark as Unverified' : 'Mark as Verified'}
-            </button>
-          </div>
-        </div>
-      )}
 
       {/* Lightbox: Full-screen Image Viewer */}
       {selectedImageFull && (
@@ -1191,6 +1362,137 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({ onBack }) => {
             alt="Attachment"
             className="max-w-full max-h-[85vh] rounded-2xl shadow-2xl object-contain border border-[#2a3942]"
           />
+        </div>
+      )}
+
+      {/* Lightbox: Full-screen Image Bundle Viewer (WhatsApp Style) */}
+      {selectedBundleFull && selectedBundleFull.length > 0 && (
+        <div
+          className="fixed inset-0 z-50 flex flex-col justify-between bg-black/95 backdrop-blur-md p-3 sm:p-4 select-none"
+          onClick={() => setSelectedBundleFull(null)}
+        >
+          {/* Top Bar: Counter, Download Current, Download All, Close */}
+          <div
+            className="flex items-center justify-between z-50 w-full max-w-5xl mx-auto px-2 py-2"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center space-x-2 text-white">
+              <Layers className="w-5 h-5 text-[#00a884]" />
+              <span className="text-xs sm:text-sm font-semibold">
+                Photo {bundleViewerIndex + 1} of {selectedBundleFull.length}
+              </span>
+            </div>
+
+            <div className="flex items-center space-x-2">
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handleDownloadImage(e, selectedBundleFull[bundleViewerIndex], `photo_${bundleViewerIndex + 1}.jpg`);
+                }}
+                className="px-3 py-1.5 text-white bg-[#202c33] hover:bg-[#2a3942] rounded-xl border border-[#2a3942] flex items-center space-x-1.5 text-xs font-semibold shadow-lg transition-colors"
+                title="Download current photo"
+              >
+                <Download className="w-3.5 h-3.5" />
+                <span className="hidden sm:inline">Save Photo</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  selectedBundleFull.forEach((url, i) => {
+                    setTimeout(() => {
+                      const a = document.createElement('a');
+                      a.href = url;
+                      a.download = `aegis_bundle_${Date.now()}_${i + 1}.jpg`;
+                      document.body.appendChild(a);
+                      a.click();
+                      document.body.removeChild(a);
+                    }, i * 200);
+                  });
+                  setCopiedNotice(`Downloading ${selectedBundleFull.length} photos...`);
+                  setTimeout(() => setCopiedNotice(null), 2500);
+                }}
+                className="px-3 py-1.5 text-white bg-[#00a884] hover:bg-[#009272] rounded-xl flex items-center space-x-1.5 text-xs font-bold shadow-lg transition-colors"
+                title="Download all photos in bundle"
+              >
+                <Download className="w-3.5 h-3.5" />
+                <span>Save All ({selectedBundleFull.length})</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setSelectedBundleFull(null)}
+                className="p-2 text-white bg-[#202c33] hover:bg-[#2a3942] rounded-xl border border-[#2a3942] transition-colors"
+                title="Close"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+          </div>
+
+          {/* Main Photo with Nav Buttons */}
+          <div
+            className="relative flex-1 flex items-center justify-center min-h-0 w-full max-w-5xl mx-auto my-2 px-2"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {selectedBundleFull.length > 1 && (
+              <button
+                type="button"
+                onClick={() =>
+                  setBundleViewerIndex((prev) => (prev > 0 ? prev - 1 : selectedBundleFull.length - 1))
+                }
+                className="absolute left-2 sm:left-4 z-10 p-2 sm:p-3 bg-black/60 hover:bg-black/90 text-white rounded-full border border-white/20 transition-all hover:scale-105 active:scale-95 shadow-xl"
+                title="Previous photo (Left arrow)"
+              >
+                <ChevronLeft className="w-5 h-5 sm:w-6 sm:h-6" />
+              </button>
+            )}
+
+            <img
+              key={bundleViewerIndex}
+              src={selectedBundleFull[bundleViewerIndex]}
+              alt={`Photo ${bundleViewerIndex + 1}`}
+              className="max-w-full max-h-[70vh] rounded-2xl shadow-2xl object-contain border border-[#2a3942] animate-in fade-in zoom-in-95 duration-150"
+            />
+
+            {selectedBundleFull.length > 1 && (
+              <button
+                type="button"
+                onClick={() =>
+                  setBundleViewerIndex((prev) => (prev < selectedBundleFull.length - 1 ? prev + 1 : 0))
+                }
+                className="absolute right-2 sm:right-4 z-10 p-2 sm:p-3 bg-black/60 hover:bg-black/90 text-white rounded-full border border-white/20 transition-all hover:scale-105 active:scale-95 shadow-xl"
+                title="Next photo (Right arrow)"
+              >
+                <ChevronRight className="w-5 h-5 sm:w-6 sm:h-6" />
+              </button>
+            )}
+          </div>
+
+          {/* Bottom Thumbnails Carousel */}
+          {selectedBundleFull.length > 1 && (
+            <div
+              className="flex items-center justify-center space-x-2 py-2 overflow-x-auto max-w-xl mx-auto z-50 px-2"
+              onClick={(e) => e.stopPropagation()}
+            >
+              {selectedBundleFull.map((thumbUrl, idx) => (
+                <button
+                  key={idx}
+                  type="button"
+                  onClick={() => setBundleViewerIndex(idx)}
+                  className={`w-12 h-12 sm:w-14 sm:h-14 rounded-xl overflow-hidden border-2 shrink-0 transition-all ${
+                    bundleViewerIndex === idx
+                      ? 'border-[#00a884] scale-105 shadow-md shadow-[#00a884]/30'
+                      : 'border-white/20 opacity-60 hover:opacity-100'
+                  }`}
+                >
+                  <img src={thumbUrl} alt="" className="w-full h-full object-cover" />
+                </button>
+              ))}
+            </div>
+          )}
         </div>
       )}
     </div>

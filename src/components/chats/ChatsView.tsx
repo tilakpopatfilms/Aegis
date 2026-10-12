@@ -16,6 +16,7 @@ import {
 import { useAuth } from '../../context/AuthContext';
 import { useChat } from '../../context/ChatContext';
 import { Conversation } from '../../types';
+import { isConversationPinned } from '../../db/localDb';
 
 interface ChatsViewProps {
   onOpenSearch: () => void;
@@ -60,8 +61,8 @@ export const ChatsView: React.FC<ChatsViewProps> = ({ onOpenSearch }) => {
     return timeB - timeA;
   });
 
-  const pinned = sorted.filter((c) => c.isPinned);
-  const unpinned = sorted.filter((c) => !c.isPinned);
+  const pinned = sorted.filter((c) => c.isPinned || isConversationPinned(c.id));
+  const unpinned = sorted.filter((c) => !c.isPinned && !isConversationPinned(c.id));
 
   const formatTime = (iso?: string) => {
     if (!iso) return '';
@@ -192,7 +193,7 @@ export const ChatsView: React.FC<ChatsViewProps> = ({ onOpenSearch }) => {
             </div>
 
             <div className="flex items-center space-x-1.5 shrink-0">
-              {c.isPinned && (
+              {(c.isPinned || isConversationPinned(c.id)) && (
                 <span title="Pinned">
                   <Pin className="w-3.5 h-3.5 text-amber-500 fill-current" />
                 </span>
@@ -227,7 +228,7 @@ export const ChatsView: React.FC<ChatsViewProps> = ({ onOpenSearch }) => {
                 className="w-full text-left px-3 py-1.5 hover:bg-neutral-100 dark:hover:bg-[#202024] flex items-center space-x-2"
               >
                 <Pin className="w-3.5 h-3.5" />
-                <span>{c.isPinned ? 'Unpin chat' : 'Pin chat'}</span>
+                <span>{c.isPinned || isConversationPinned(c.id) ? 'Unpin chat' : 'Pin chat'}</span>
               </button>
               <button
                 onClick={() => {

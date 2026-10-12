@@ -39,6 +39,9 @@ import {
   saveLocalProfile,
   getLocalProfile,
   isMessageDeletedLocally,
+  isConversationPinned,
+  setConversationPinned,
+  getPinnedConversationIds,
 } from '../db/localDb';
 import {
   encryptE2EEPayload,
@@ -65,6 +68,7 @@ interface ChatContextType {
   startOrGetConversation: (otherUserUid: string) => Promise<Conversation>;
   sendTextMessage: (text: string, replyToId?: string) => Promise<void>;
   sendImageMessage: (file: File) => Promise<void>;
+  sendImageBundleMessage: (files: File[], captionText?: string) => Promise<void>;
   sendVoiceMessage: (audioBlob: Blob, durationSeconds: number) => Promise<void>;
   updateEphemeralSetting: (setting: EphemeralSetting) => Promise<void>;
   addMessageReaction: (messageId: string, emoji: string) => Promise<void>;
@@ -157,11 +161,15 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       }
 
       // Filter out ghost conversations that have no messages or invalid contact placeholders
+      const pinnedSet = getPinnedConversationIds();
       const validConvs = localList.filter((c) => {
         const hasMessages = !!c.lastMessageText || !!c.lastMessageTime;
         const isValidUsername = c.otherUser?.username && c.otherUser.username !== 'contact';
         return hasMessages && isValidUsername;
-      });
+      }).map((c) => ({
+        ...c,
+        isPinned: pinnedSet.has(c.id) || !!c.isPinned,
+      }));
 
       setConversations(validConvs);
       setLoadingConversations(false);
@@ -236,11 +244,13 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
         // Merge with existing local conversations
         const localList = await getLocalConversations(user.uid);
+        const pinnedSet = getPinnedConversationIds();
         const mergedMap = new Map<string, Conversation>();
 
         localList.forEach((c) => mergedMap.set(c.id, c));
         loaded.forEach((c) => {
           const existing = mergedMap.get(c.id);
+          const isPinned = pinnedSet.has(c.id) || !!existing?.isPinned || !!c.isPinned;
           mergedMap.set(c.id, {
             ...existing,
             ...c,
@@ -250,7 +260,7 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
             lastMessageStatus: c.lastMessageStatus || existing?.lastMessageStatus,
             lastReaction: c.lastReaction || existing?.lastReaction,
             otherUser: c.otherUser || existing?.otherUser,
-            isPinned: existing?.isPinned,
+            isPinned,
             isMuted: existing?.isMuted,
             localEphemeralSetting: existing?.localEphemeralSetting || c.localEphemeralSetting,
           });
@@ -258,6 +268,10 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
         const finalList = Array.from(mergedMap.values())
           .filter((c) => (!!c.lastMessageText || !!c.lastMessageTime) && c.otherUser?.username !== 'contact')
+          .map((c) => ({
+            ...c,
+            isPinned: pinnedSet.has(c.id) || !!c.isPinned,
+          }))
           .sort(
             (a, b) => new Date(b.lastMessageTime || b.updatedAt || 0).getTime() - new Date(a.lastMessageTime || a.updatedAt || 0).getTime()
           );
@@ -1155,6 +1169,170 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     }
   };
 
+  // Send WhatsApp-Style Multiple Images Bundle (Max 5 images) with optional caption text
+  const sendImageBundleMessage = async (files: File[], captionText?: string): Promise<void> => {
+    if (!user || !selectedConversation || !files || files.length === 0) return;
+
+    let privKey = await getLocalPrivateKey();
+    if (!privKey) {
+      const stored = await getKeyStoreItem('plainPrivateKey');
+      privKey = stored?.data || null;
+    }
+    if (!privKey) {
+      const newKeys = generateIdentityKeyPair();
+      privKey = newKeys.privateKey;
+      try {
+        localStorage.setItem(`aegis_priv_${user.uid}`, privKey);
+        localStorage.setItem('aegis_plain_priv_key', privKey);
+      } catch (e) {}
+      saveKeyStoreItem('plainPrivateKey', privKey).catch(() => {});
+    }
+
+    const recipientUid = selectedConversation.participants.find((p) => p !== user.uid);
+    if (!recipientUid) return;
+
+    let recipientPubKey: string | undefined = undefined;
+    try {
+      const recipientSnap = await getDoc(doc(db, 'public_profiles', recipientUid));
+      if (recipientSnap.exists()) {
+        recipientPubKey = recipientSnap.data().publicKey;
+      }
+    } catch (e) {}
+
+    if (!recipientPubKey) {
+      try {
+        const prekeySnap = await getDoc(doc(db, 'prekeys', recipientUid));
+        if (prekeySnap.exists()) {
+          recipientPubKey = prekeySnap.data().signedPrekey;
+        }
+      } catch (e) {}
+    }
+
+    if (!recipientPubKey) {
+      recipientPubKey = selectedConversation.otherUser?.publicKey;
+    }
+
+    if (!recipientPubKey) {
+      recipientPubKey = conversations.find((c) => c.participants.includes(recipientUid))?.otherUser?.publicKey;
+    }
+
+    if (!recipientPubKey) {
+      const cachedProf = await getLocalProfile(recipientUid);
+      if (cachedProf?.publicKey) recipientPubKey = cachedProf.publicKey;
+    }
+
+    if (!recipientPubKey) {
+      try {
+        const usernameSnap = await getDoc(doc(db, 'usernames', recipientUid));
+        if (usernameSnap.exists()) {
+          const mappedUid = usernameSnap.data().uid;
+          const pSnap = await getDoc(doc(db, 'public_profiles', mappedUid));
+          if (pSnap.exists()) recipientPubKey = pSnap.data().publicKey;
+        }
+      } catch (e) {}
+    }
+
+    if (!recipientPubKey) {
+      throw new Error('Recipient identity key not found.');
+    }
+
+    const senderPubKey = getPublicKeyFromPrivateKey(privKey);
+    if (profile && profile.publicKey !== senderPubKey) {
+      updateDoc(doc(db, 'public_profiles', user.uid), { publicKey: senderPubKey }).catch(() => {});
+    }
+
+    // Limit to max 5 images
+    const targetFiles = files.slice(0, 5);
+    const compressedImages: string[] = [];
+    for (const file of targetFiles) {
+      const compressed = await compressImageFile(file);
+      compressedImages.push(compressed);
+    }
+
+    const cleanCaption = (captionText || '').trim();
+    const content: PlaintextMessageContent = {
+      images: compressedImages,
+      imageBase64: compressedImages[0], // Primary preview
+      text: cleanCaption,
+      fileName: `${targetFiles.length} Photos`,
+    };
+
+    const ciphertext = await encryptE2EEPayload(JSON.stringify(content), recipientPubKey, privKey);
+    const msgId = `msg_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
+    const nowIso = new Date().toISOString();
+
+    const localMsg: DecryptedMessage = {
+      id: msgId,
+      conversationId: selectedConversation.id,
+      senderUid: user.uid,
+      recipientUid,
+      content,
+      ephemeralType: 'off',
+      status: 'sending',
+      timestamp: nowIso,
+    };
+
+    await saveLocalMessage(localMsg);
+    setMessages((prev) => [...prev, localMsg]);
+
+    const previewLabel = cleanCaption
+      ? `📷 ${cleanCaption}`
+      : targetFiles.length > 1
+      ? `📷 ${targetFiles.length} Photos`
+      : 'Photo';
+
+    const updatedConv: Conversation = {
+      ...selectedConversation,
+      lastMessageText: previewLabel,
+      lastMessageTime: nowIso,
+      updatedAt: nowIso,
+    };
+    setSelectedConversation(updatedConv);
+    await saveLocalConversation(updatedConv);
+    setConversations((prev) => [updatedConv, ...prev.filter((c) => c.id !== selectedConversation.id)]);
+
+    try {
+      await setDoc(doc(db, 'messages', msgId), {
+        conversationId: selectedConversation.id,
+        senderUid: user.uid,
+        senderUsername: profile?.username || user.uid,
+        senderFullName: profile?.fullName || profile?.username || 'User',
+        senderPhotoURL: profile?.photoURL || '',
+        senderPublicKey: senderPubKey,
+        recipientUid,
+        participants: [user.uid, recipientUid],
+        ciphertext,
+        content,
+        text: previewLabel,
+        ephemeralType: 'off',
+        createdAt: nowIso,
+      });
+
+      await setDoc(
+        doc(db, 'conversations', selectedConversation.id),
+        {
+          id: selectedConversation.id,
+          participants: selectedConversation.participants,
+          ephemeralSetting: selectedConversation.ephemeralSetting,
+          lastMessageText: previewLabel,
+          lastMessageTime: nowIso,
+          lastSenderUid: user.uid,
+          updatedAt: nowIso,
+        },
+        { merge: true }
+      );
+
+      localMsg.status = 'delivered';
+      await saveLocalMessage(localMsg);
+      setMessages((prev) => prev.map((m) => (m.id === msgId ? { ...m, status: 'delivered' } : m)));
+    } catch (err) {
+      console.warn('Notice sending image bundle message:', err);
+      localMsg.status = 'sent';
+      await saveLocalMessage(localMsg);
+      setMessages((prev) => prev.map((m) => (m.id === msgId ? { ...m, status: 'sent' } : m)));
+    }
+  };
+
   // Send Encrypted Voice Message (WhatsApp-style E2EE voice note)
   const sendVoiceMessage = async (audioBlob: Blob, durationSeconds: number): Promise<void> => {
     if (!user || !selectedConversation) return;
@@ -1511,7 +1689,9 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     }
 
     setPinLimitNotice(null);
-    const updated = { ...conv, isPinned: !conv.isPinned };
+    const newPinned = !conv.isPinned;
+    setConversationPinned(conversationId, newPinned);
+    const updated = { ...conv, isPinned: newPinned };
     await saveLocalConversation(updated, true);
     setConversations((prev) => prev.map((c) => (c.id === conversationId ? updated : c)));
     return true;
@@ -1531,6 +1711,7 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         startOrGetConversation,
         sendTextMessage,
         sendImageMessage,
+        sendImageBundleMessage,
         sendVoiceMessage,
         updateEphemeralSetting,
         addMessageReaction,
