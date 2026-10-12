@@ -131,9 +131,15 @@ export const DirectChatInvitePage: React.FC<DirectChatInvitePageProps> = ({
   if (loading) {
     return (
       <div className="h-[100dvh] w-full bg-[#09090b] flex flex-col items-center justify-center text-white space-y-3">
-        <div className="w-10 h-10 rounded-full bg-white text-neutral-900 flex items-center justify-center animate-pulse">
-          <Shield className="w-5 h-5" />
-        </div>
+        <img
+          src="/pwa-maskable-512x512.png"
+          alt="Aegis"
+          className="w-12 h-12 rounded-2xl object-contain animate-pulse"
+          onError={(e) => {
+            (e.target as HTMLImageElement).src =
+              'https://raw.githubusercontent.com/tilakpopatfilms/Aegis/main/public/pwa-maskable-512x512.png';
+          }}
+        />
         <p className="text-xs font-semibold tracking-wider text-neutral-400">
           Connecting to @{cleanTarget}...
         </p>
@@ -184,10 +190,16 @@ export const DirectChatInvitePage: React.FC<DirectChatInvitePageProps> = ({
           <span>Back to Home</span>
         </button>
 
-        <div className="flex items-center space-x-1.5 select-none">
-          <div className="w-6 h-6 rounded-full bg-white text-neutral-900 flex items-center justify-center font-bold text-xs">
-            <Shield className="w-3.5 h-3.5" />
-          </div>
+        <div className="flex items-center space-x-2 select-none">
+          <img
+            src="/pwa-maskable-512x512.png"
+            alt="Aegis"
+            className="w-6 h-6 rounded-lg object-contain"
+            onError={(e) => {
+              (e.target as HTMLImageElement).src =
+                'https://raw.githubusercontent.com/tilakpopatfilms/Aegis/main/public/pwa-maskable-512x512.png';
+            }}
+          />
           <span className="font-bold text-sm tracking-tight text-white">Aegis</span>
         </div>
       </div>
@@ -218,7 +230,7 @@ export const DirectChatInvitePage: React.FC<DirectChatInvitePageProps> = ({
                 </span>
               </div>
               <p className="text-[11px] text-neutral-500 truncate">
-                {targetProfile.bio || 'Available • End-to-end encrypted'}
+                {targetProfile.bio || 'Available'}
               </p>
             </div>
           </div>
@@ -310,8 +322,8 @@ export const DirectChatInvitePage: React.FC<DirectChatInvitePageProps> = ({
       </div>
 
       {/* Footer Info */}
-      <div className="text-center text-[11px] text-neutral-400">
-        Aegis • Zero Plaintext on Cloud • Private by Design
+      <div className="text-center text-[11px] text-neutral-500">
+        Aegis Messenger • All rights reserved
       </div>
     </div>
   );

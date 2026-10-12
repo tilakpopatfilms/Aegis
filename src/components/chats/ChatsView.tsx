@@ -3,7 +3,6 @@ import {
   MessageSquare,
   Search,
   Pin,
-  VolumeX,
   Clock,
   Trash2,
   Plus,
@@ -29,7 +28,6 @@ export const ChatsView: React.FC<ChatsViewProps> = ({ onOpenSearch }) => {
     selectedConversation,
     selectConversation,
     togglePinConversation,
-    toggleMuteConversation,
     deleteConversationLocally,
     pinLimitNotice,
     clearPinNotice,
@@ -188,17 +186,12 @@ export const ChatsView: React.FC<ChatsViewProps> = ({ onOpenSearch }) => {
                 </span>
               ) : (
                 <span className="truncate">
-                  {c.lastMessageText || 'Encrypted conversation ready'}
+                  {c.lastMessageText || 'Ready to chat'}
                 </span>
               )}
             </div>
 
             <div className="flex items-center space-x-1.5 shrink-0">
-              {c.isMuted && (
-                <span title="Muted">
-                  <VolumeX className="w-3.5 h-3.5 text-neutral-400" />
-                </span>
-              )}
               {c.isPinned && (
                 <span title="Pinned">
                   <Pin className="w-3.5 h-3.5 text-amber-500 fill-current" />
@@ -235,16 +228,6 @@ export const ChatsView: React.FC<ChatsViewProps> = ({ onOpenSearch }) => {
               >
                 <Pin className="w-3.5 h-3.5" />
                 <span>{c.isPinned ? 'Unpin chat' : 'Pin chat'}</span>
-              </button>
-              <button
-                onClick={() => {
-                  toggleMuteConversation(c.id);
-                  setActiveMenuConvId(null);
-                }}
-                className="w-full text-left px-3 py-1.5 hover:bg-neutral-100 dark:hover:bg-[#202024] flex items-center space-x-2"
-              >
-                <VolumeX className="w-3.5 h-3.5" />
-                <span>{c.isMuted ? 'Unmute' : 'Mute'}</span>
               </button>
               <button
                 onClick={() => {

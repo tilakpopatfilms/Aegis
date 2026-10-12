@@ -310,7 +310,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       photoURL: finalPhoto,
       accountType: data.accountType,
       publicKey: identityKeys.publicKey,
-      bio: 'Available • End-to-end encrypted',
+      bio: 'Available',
       createdAt: new Date().toISOString(),
     };
     await setDoc(doc(db, 'public_profiles', uid), newProfile);
@@ -445,7 +445,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         fullName: username,
         accountType: 'public',
         publicKey: '',
-        bio: 'Available • End-to-end encrypted',
+        bio: 'Available',
         createdAt: credData.createdAt || new Date().toISOString(),
       };
       await setDoc(doc(db, 'public_profiles', resolvedUid), userProfile);

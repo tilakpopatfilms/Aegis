@@ -89,7 +89,29 @@ export async function getLocalMessages(conversationId: string): Promise<Decrypte
   return all.sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
 }
 
+export function markMessageAsDeletedLocally(messageId: string): void {
+  try {
+    const raw = localStorage.getItem('aegis_deleted_msg_ids') || '[]';
+    const list: string[] = JSON.parse(raw);
+    if (!list.includes(messageId)) {
+      list.push(messageId);
+      localStorage.setItem('aegis_deleted_msg_ids', JSON.stringify(list));
+    }
+  } catch (e) {}
+}
+
+export function isMessageDeletedLocally(messageId: string): boolean {
+  try {
+    const raw = localStorage.getItem('aegis_deleted_msg_ids') || '[]';
+    const list: string[] = JSON.parse(raw);
+    return list.includes(messageId);
+  } catch (e) {
+    return false;
+  }
+}
+
 export async function deleteLocalMessage(messageId: string): Promise<void> {
+  markMessageAsDeletedLocally(messageId);
   const db = await getLocalDB();
   await db.delete('messages', messageId);
 }

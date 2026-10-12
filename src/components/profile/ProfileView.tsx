@@ -116,7 +116,7 @@ export const ProfileView: React.FC = () => {
     setPasswordChangeLoading(true);
     try {
       await changePassword(currentPassOrSecKey, newPassword);
-      setPasswordNotice('Password changed successfully. Your E2EE keys are re-encrypted.');
+      setPasswordNotice('Password changed successfully.');
       setCurrentPassOrSecKey('');
       setNewPassword('');
       setConfirmNewPassword('');
@@ -171,7 +171,7 @@ export const ProfileView: React.FC = () => {
       <div className="pb-3 border-b border-neutral-200 dark:border-neutral-800">
         <h1 className="text-xl font-bold tracking-tight">Profile & Account Settings</h1>
         <p className="text-xs text-neutral-500 dark:text-neutral-400">
-          Manage your personal details, custom link, password, and E2EE recovery key
+          Manage your personal details, custom link, password, and security key
         </p>
       </div>
 
@@ -284,7 +284,7 @@ export const ProfileView: React.FC = () => {
             </div>
           ) : (
             <div className="flex items-center justify-between text-xs text-neutral-600 dark:text-neutral-400">
-              <p className="italic">{profile.bio || 'Available • End-to-end encrypted'}</p>
+              <p className="italic">{profile.bio || 'Available'}</p>
               <button
                 onClick={() => {
                   setBioInput(profile.bio || '');
@@ -306,7 +306,7 @@ export const ProfileView: React.FC = () => {
           <h3 className="font-bold text-sm">My Account Direct Link</h3>
         </div>
         <p className="text-xs text-neutral-500 dark:text-neutral-400">
-          Share this URL with anyone so they can directly open an encrypted chat with you on Aegis:
+          Share this URL with anyone so they can directly open a chat with you on Aegis:
         </p>
 
         <div className="p-3 bg-white dark:bg-[#18181b] rounded-2xl border border-neutral-200 dark:border-neutral-800 flex items-center justify-between gap-2">

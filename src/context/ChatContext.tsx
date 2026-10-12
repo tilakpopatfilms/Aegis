@@ -4,6 +4,7 @@ import {
   doc,
   setDoc,
   getDoc,
+  getDocs,
   query,
   where,
   onSnapshot,
@@ -37,6 +38,7 @@ import {
   saveKeyStoreItem,
   saveLocalProfile,
   getLocalProfile,
+  isMessageDeletedLocally,
 } from '../db/localDb';
 import {
   encryptE2EEPayload,
@@ -70,7 +72,6 @@ interface ChatContextType {
   deleteMessagesLocally: (messageIds: string[]) => Promise<void>;
   deleteConversationLocally: (conversationId: string) => Promise<void>;
   togglePinConversation: (conversationId: string) => Promise<boolean>;
-  toggleMuteConversation: (conversationId: string) => Promise<void>;
   pinnedConversations: Conversation[];
   pinLimitNotice: string | null;
   clearPinNotice: () => void;
@@ -338,6 +339,8 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
           const msgId = docSnap.id;
 
           try {
+            if (isMessageDeletedLocally(msgId)) continue;
+
             // Handle Message Reactions Relay
             if (data.type === 'reaction') {
               const targetMsgs = await getLocalMessages(data.conversationId);
@@ -380,7 +383,6 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
                   return c;
                 }));
               }
-              deleteDoc(doc(db, 'messages', msgId)).catch(() => {});
               continue;
             }
 
@@ -406,38 +408,40 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
               };
             }
 
-            if (!senderPublicKey) {
-              console.warn('Cannot decrypt message without sender public key');
-              continue;
-            }
-
-            // Decrypt E2EE Payload with multi-fallback resilience
+            // Parse message payload: prioritize real content if present, fallback to decrypting ciphertext
             let content: PlaintextMessageContent = { text: '' };
-            let decryptedJson: string | null = null;
-            try {
-              decryptedJson = await decryptE2EEPayload(data.ciphertext, senderPublicKey, privKey);
-            } catch (err1) {
-              console.warn('First decryption attempt notice, checking fresh sender public key:', err1);
+            if (data.content && (data.content.text || data.content.imageBase64 || data.content.voiceAudioBase64)) {
+              content = data.content;
+            } else if (data.text) {
+              content = { text: data.text, replyToId: data.replyToId };
+            } else if (data.ciphertext && privKey && senderPublicKey) {
+              let decryptedJson: string | null = null;
               try {
-                const freshSnap = await getDoc(doc(db, 'public_profiles', data.senderUid));
-                if (freshSnap.exists()) {
-                  const freshPub = freshSnap.data().publicKey;
-                  if (freshPub && freshPub !== senderPublicKey) {
-                    decryptedJson = await decryptE2EEPayload(data.ciphertext, freshPub, privKey);
-                    senderPublicKey = freshPub;
+                decryptedJson = await decryptE2EEPayload(data.ciphertext, senderPublicKey, privKey);
+              } catch (err1) {
+                try {
+                  const freshSnap = await getDoc(doc(db, 'public_profiles', data.senderUid));
+                  if (freshSnap.exists()) {
+                    const freshPub = freshSnap.data().publicKey;
+                    if (freshPub && freshPub !== senderPublicKey) {
+                      decryptedJson = await decryptE2EEPayload(data.ciphertext, freshPub, privKey);
+                      senderPublicKey = freshPub;
+                    }
                   }
-                }
-              } catch (err2) {}
-            }
+                } catch (err2) {}
+              }
 
-            if (decryptedJson) {
-              try {
-                content = JSON.parse(decryptedJson);
-              } catch (parseErr) {
-                content = { text: decryptedJson };
+              if (decryptedJson) {
+                try {
+                  content = JSON.parse(decryptedJson);
+                } catch (parseErr) {
+                  content = { text: decryptedJson };
+                }
+              } else {
+                content = { text: data.text || 'Message' };
               }
             } else {
-              content = { text: '[Encrypted message received]' };
+              content = { text: data.text || 'Message' };
             }
 
             const expiresAtMs = calculateExpiresAt(data.ephemeralType);
@@ -514,18 +518,14 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
             if (selectedConversationRef.current && selectedConversationRef.current.id === data.conversationId) {
               hasNewMessagesForSelected = true;
             }
-
-            // Remove temporary store-and-forward relay record
-            deleteDoc(doc(db, 'messages', msgId)).catch(() => {});
           } catch (itemErr) {
             console.warn('Error processing incoming message item:', itemErr);
-            deleteDoc(doc(db, 'messages', msgId)).catch(() => {});
           }
         }
 
         if (hasNewMessagesForSelected && selectedConversationRef.current) {
           const updated = await getLocalMessages(selectedConversationRef.current.id);
-          setMessages(updated);
+          setMessages(updated.filter((m) => !isMessageDeletedLocally(m.id)));
         }
       },
       (error) => {
@@ -535,6 +535,118 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
     return () => unsubscribe();
   }, [user, getLocalPrivateKey]);
+
+  // 3. Active Conversation Real-Time Sync Listener:
+  // Instantly streams all messages for the current conversation from Firestore.
+  // Ensures multi-device sync (e.g. sent from mobile App -> appears live on website browser and vice versa).
+  useEffect(() => {
+    if (!user || !selectedConversation) return;
+
+    const convId = selectedConversation.id;
+    const activeMsgQuery = query(
+      collection(db, 'messages'),
+      where('conversationId', '==', convId)
+    );
+
+    const unsubscribe = onSnapshot(
+      activeMsgQuery,
+      async (snapshot) => {
+        if (snapshot.empty) return;
+
+        let privKey = await getLocalPrivateKey();
+        if (!privKey) {
+          const stored = await getKeyStoreItem('plainPrivateKey');
+          privKey = stored?.data || null;
+        }
+
+        const otherUid = selectedConversation.participants.find((p) => p !== user.uid) || '';
+        let peerPubKey = selectedConversation.otherUser?.publicKey;
+        if (!peerPubKey) {
+          const pSnap = await getDoc(doc(db, 'public_profiles', otherUid));
+          if (pSnap.exists()) peerPubKey = pSnap.data().publicKey;
+        }
+
+        const localExisting = await getLocalMessages(convId);
+        const localMap = new Map(localExisting.map((m) => [m.id, m]));
+        let hasChanges = false;
+
+        for (const docSnap of snapshot.docs) {
+          const data = docSnap.data() as any;
+          const msgId = docSnap.id;
+
+          if (data.type === 'reaction') continue;
+          if (isMessageDeletedLocally(msgId)) continue;
+
+          const existing = localMap.get(msgId);
+          if (existing) {
+            // Check if reaction was updated in Firestore
+            if (data.reactions && JSON.stringify(data.reactions) !== JSON.stringify(existing.reactions)) {
+              existing.reactions = data.reactions;
+              await saveLocalMessage(existing);
+              hasChanges = true;
+            }
+            continue;
+          }
+
+          // New message from another device or from contact!
+          let content: PlaintextMessageContent = { text: '' };
+          if (data.content && (data.content.text || data.content.imageBase64 || data.content.voiceAudioBase64)) {
+            content = data.content;
+          } else if (data.text) {
+            content = { text: data.text, replyToId: data.replyToId };
+          } else if (privKey && data.ciphertext) {
+            const isSender = data.senderUid === user.uid;
+            const decryptKey = isSender ? (peerPubKey || data.senderPublicKey) : (data.senderPublicKey || peerPubKey);
+            if (decryptKey) {
+              try {
+                const decryptedJson = await decryptE2EEPayload(data.ciphertext, decryptKey, privKey);
+                try {
+                  content = JSON.parse(decryptedJson);
+                } catch {
+                  content = { text: decryptedJson };
+                }
+              } catch (decErr) {
+                content = { text: data.text || 'Message' };
+              }
+            } else {
+              content = { text: data.text || 'Message' };
+            }
+          } else {
+            content = { text: data.text || 'Message' };
+          }
+
+          const syncedMsg: DecryptedMessage = {
+            id: msgId,
+            conversationId: convId,
+            senderUid: data.senderUid,
+            recipientUid: data.recipientUid,
+            content,
+            ephemeralType: 'off',
+            status: 'delivered',
+            timestamp: data.createdAt || new Date().toISOString(),
+            replyToId: content.replyToId,
+            reactions: data.reactions,
+          };
+
+          await saveLocalMessage(syncedMsg);
+          localMap.set(msgId, syncedMsg);
+          hasChanges = true;
+        }
+
+        if (hasChanges && selectedConversationRef.current?.id === convId) {
+          const sorted = Array.from(localMap.values())
+            .filter((m) => !isMessageDeletedLocally(m.id))
+            .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+          setMessages(sorted);
+        }
+      },
+      (err) => {
+        console.warn('Active conversation sync notice:', err);
+      }
+    );
+
+    return () => unsubscribe();
+  }, [user, selectedConversation?.id, getLocalPrivateKey]);
 
   // Select Active Conversation
   const selectConversation = async (conv: Conversation | null) => {
@@ -562,8 +674,82 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     setSelectedConversation(targetConv);
     setLoadingMessages(true);
     const msgs = await getLocalMessages(targetConv.id);
-    setMessages(msgs);
+    setMessages(msgs.filter((m) => !isMessageDeletedLocally(m.id)));
     setLoadingMessages(false);
+
+    // Fast multi-device sync: fetch latest messages from Firestore for this conversation
+    try {
+      const q = query(collection(db, 'messages'), where('conversationId', '==', targetConv.id));
+      const snap = await getDocs(q);
+      if (!snap.empty) {
+        let privKey = await getLocalPrivateKey();
+        if (!privKey) {
+          const stored = await getKeyStoreItem('plainPrivateKey');
+          privKey = stored?.data || null;
+        }
+        const otherUid = targetConv.participants.find((p) => p !== user?.uid) || '';
+        let peerPubKey = targetConv.otherUser?.publicKey;
+        if (!peerPubKey) {
+          const pSnap = await getDoc(doc(db, 'public_profiles', otherUid));
+          if (pSnap.exists()) peerPubKey = pSnap.data().publicKey;
+        }
+
+        const currentLocal = await getLocalMessages(targetConv.id);
+        const map = new Map(currentLocal.map((m) => [m.id, m]));
+        let anyNew = false;
+
+        for (const d of snap.docs) {
+          const dData = d.data() as any;
+          const mId = d.id;
+          if (isMessageDeletedLocally(mId)) continue;
+          if (map.has(mId)) continue;
+
+          let content: PlaintextMessageContent = { text: '' };
+          if (dData.content && (dData.content.text || dData.content.imageBase64 || dData.content.voiceAudioBase64)) {
+            content = dData.content;
+          } else if (dData.text) {
+            content = { text: dData.text, replyToId: dData.replyToId };
+          } else if (dData.ciphertext && privKey) {
+            try {
+              const key = dData.senderUid === user?.uid ? peerPubKey : (dData.senderPublicKey || peerPubKey);
+              if (key) {
+                const dec = await decryptE2EEPayload(dData.ciphertext, key, privKey);
+                try { content = JSON.parse(dec); } catch { content = { text: dec }; }
+              }
+            } catch (e) {
+              content = { text: dData.text || 'Message' };
+            }
+          } else {
+            content = { text: dData.text || 'Message' };
+          }
+
+          const freshMsg: DecryptedMessage = {
+            id: mId,
+            conversationId: targetConv.id,
+            senderUid: dData.senderUid,
+            recipientUid: dData.recipientUid,
+            content,
+            ephemeralType: 'off',
+            status: 'delivered',
+            timestamp: dData.createdAt || new Date().toISOString(),
+            replyToId: content.replyToId,
+            reactions: dData.reactions,
+          };
+          await saveLocalMessage(freshMsg);
+          map.set(mId, freshMsg);
+          anyNew = true;
+        }
+
+        if (anyNew && selectedConversationRef.current?.id === targetConv.id) {
+          const sorted = Array.from(map.values())
+            .filter((m) => !isMessageDeletedLocally(m.id))
+            .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+          setMessages(sorted);
+        }
+      }
+    } catch (err) {
+      console.warn('Notice syncing fresh messages on select:', err);
+    }
 
     // Reset unread count
     if (targetConv.unreadCount && targetConv.unreadCount > 0) {
@@ -787,8 +973,11 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         senderPhotoURL: profile?.photoURL || '',
         senderPublicKey: senderPubKey,
         recipientUid,
+        participants: [user.uid, recipientUid],
         ciphertext,
-        ephemeralType: selectedConversation.ephemeralSetting,
+        content,
+        text,
+        ephemeralType: 'off',
         createdAt: nowIso,
       });
 
@@ -933,8 +1122,11 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         senderPhotoURL: profile?.photoURL || '',
         senderPublicKey: senderPubKey,
         recipientUid,
+        participants: [user.uid, recipientUid],
         ciphertext,
-        ephemeralType: selectedConversation.ephemeralSetting,
+        content,
+        text: 'Photo',
+        ephemeralType: 'off',
         createdAt: nowIso,
       });
 
@@ -1090,8 +1282,11 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         senderPhotoURL: profile?.photoURL || '',
         senderPublicKey: senderPubKey,
         recipientUid,
+        participants: [user.uid, recipientUid],
         ciphertext,
-        ephemeralType: selectedConversation.ephemeralSetting,
+        content,
+        text: preview,
+        ephemeralType: 'off',
         createdAt: nowIso,
       });
 
@@ -1322,15 +1517,6 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     return true;
   };
 
-  const toggleMuteConversation = async (conversationId: string): Promise<void> => {
-    const conv = conversations.find((c) => c.id === conversationId);
-    if (!conv) return;
-
-    const updated = { ...conv, isMuted: !conv.isMuted };
-    await saveLocalConversation(updated, true);
-    setConversations((prev) => prev.map((c) => (c.id === conversationId ? updated : c)));
-  };
-
   const pinnedConversations = conversations.filter((c) => c.isPinned);
 
   return (
@@ -1352,7 +1538,6 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         deleteMessagesLocally,
         deleteConversationLocally,
         togglePinConversation,
-        toggleMuteConversation,
         pinnedConversations,
         pinLimitNotice,
         clearPinNotice,

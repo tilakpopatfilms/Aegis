@@ -12,7 +12,7 @@ import { RegisterPage } from './components/auth/RegisterPage';
 import { DirectChatInvitePage } from './components/chats/DirectChatInvitePage';
 import { QRModal } from './components/qr/QRModal';
 import { OfflineIndicator } from './components/pwa/OfflineIndicator';
-import { Shield, Lock, Key, ArrowRight, MessageSquare } from 'lucide-react';
+import { Zap, Mic, Image as ImageIcon, Smartphone, Trash2, RefreshCw, MessageSquare, ArrowRight, CheckCircle2 } from 'lucide-react';
 
 const MainApp: React.FC = () => {
   const { user, profile, loading } = useAuth();
@@ -67,9 +67,15 @@ const MainApp: React.FC = () => {
   if (loading) {
     return (
       <div className="h-[100dvh] w-full bg-[#09090b] flex flex-col items-center justify-center text-white space-y-3">
-        <div className="w-10 h-10 rounded-full bg-white text-neutral-900 flex items-center justify-center animate-pulse">
-          <Shield className="w-5 h-5" />
-        </div>
+        <img
+          src="/pwa-maskable-512x512.png"
+          alt="Aegis"
+          className="w-12 h-12 rounded-2xl object-contain animate-pulse"
+          onError={(e) => {
+            (e.target as HTMLImageElement).src =
+              'https://raw.githubusercontent.com/tilakpopatfilms/Aegis/main/public/pwa-maskable-512x512.png';
+          }}
+        />
         <p className="text-xs font-semibold tracking-wider text-neutral-400">
           Loading Aegis...
         </p>
@@ -118,7 +124,13 @@ const MainApp: React.FC = () => {
   }
 
   return (
-    <div className="h-[100dvh] w-full flex flex-col bg-[#09090b] text-neutral-100 overflow-hidden select-none">
+    <div
+      className={`w-full flex flex-col bg-[#09090b] text-neutral-100 select-none ${
+        !user || currentPath === '/home'
+          ? 'min-h-screen overflow-x-hidden overflow-y-auto'
+          : 'h-[100dvh] overflow-hidden'
+      }`}
+    >
       {/* Top Header */}
       <Header
         currentPath={currentPath}
@@ -128,71 +140,107 @@ const MainApp: React.FC = () => {
       {/* Main Workspace */}
       {!user || currentPath === '/home' ? (
         /* Welcome Landing for Users at /home or unauthenticated / */
-        <main className="flex-1 overflow-y-auto max-w-4xl mx-auto w-full flex flex-col items-center justify-start py-8 sm:py-16 px-4 sm:px-6 text-center space-y-8">
-          <div className="space-y-3">
-            <div className="w-16 h-16 rounded-full bg-white text-neutral-900 flex items-center justify-center mx-auto shadow-sm">
-              <Shield className="w-8 h-8" />
-            </div>
-            <h1 className="text-3xl md:text-5xl font-extrabold tracking-tight text-white">
-              Aegis Private Messaging
+        <main className="flex-1 max-w-4xl mx-auto w-full flex flex-col items-center justify-start py-8 sm:py-14 px-4 sm:px-6 text-center space-y-10 pb-36 min-w-0">
+          {/* Hero Banner */}
+          <div className="space-y-4 max-w-2xl mx-auto min-w-0 w-full">
+            <img
+              src="/pwa-maskable-512x512.png"
+              alt="Aegis"
+              className="w-16 h-16 rounded-2xl object-contain mx-auto shadow-lg"
+              onError={(e) => {
+                (e.target as HTMLImageElement).src =
+                  'https://raw.githubusercontent.com/tilakpopatfilms/Aegis/main/public/pwa-maskable-512x512.png';
+              }}
+            />
+            <h1 className="text-3xl sm:text-5xl font-extrabold tracking-tight text-white leading-tight">
+              Aegis
             </h1>
-            <p className="text-sm text-neutral-400 max-w-lg mx-auto leading-relaxed">
-              Genuine end-to-end encrypted messaging with offline local storage, disappearing messages, and zero plaintext on cloud servers.
+            <p className="text-xs sm:text-sm text-neutral-400 max-w-lg mx-auto leading-relaxed">
+              Simple. Fast. Reliable messaging across all your devices with voice notes, photo sharing, and instant sync.
             </p>
-          </div>
 
-          {/* Architecture Highlights */}
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 w-full max-w-2xl text-left">
-            <div className="p-4 bg-[#121215] rounded-2xl border border-neutral-800 space-y-1.5 shadow-2xs">
-              <Lock className="w-5 h-5 text-neutral-200" />
-              <h3 className="font-bold text-xs text-white">End-to-End Encrypted</h3>
-              <p className="text-[11px] text-neutral-400">
-                Curve25519 DH + AES-256-GCM payload encryption before network transmission.
-              </p>
-            </div>
-
-            <div className="p-4 bg-[#121215] rounded-2xl border border-neutral-800 space-y-1.5 shadow-2xs">
-              <Key className="w-5 h-5 text-neutral-200" />
-              <h3 className="font-bold text-xs text-white">Permanent Security Key</h3>
-              <p className="text-[11px] text-neutral-400">
-                128-bit client recovery entropy formatted as ABCD-EFGH-IJKL.
-              </p>
-            </div>
-
-            <div className="p-4 bg-[#121215] rounded-2xl border border-neutral-800 space-y-1.5 shadow-2xs">
-              <Shield className="w-5 h-5 text-neutral-200" />
-              <h3 className="font-bold text-xs text-white">Offline Local Storage</h3>
-              <p className="text-[11px] text-neutral-400">
-                Messages cached in device memory so you can review chats even when disconnected.
-              </p>
-            </div>
-          </div>
-
-          {/* Actions */}
-          <div className="flex flex-col sm:flex-row gap-3 w-full max-w-xs">
-            {user ? (
-              <button
-                onClick={() => navigate('/chat')}
-                className="flex-1 py-3 px-5 bg-white hover:bg-neutral-200 text-neutral-900 font-bold rounded-xl shadow-sm transition-all text-xs"
-              >
-                Go to Chats
-              </button>
-            ) : (
-              <>
+            {/* Actions */}
+            <div className="flex flex-col sm:flex-row gap-3 w-full max-w-xs mx-auto pt-2">
+              {user ? (
                 <button
-                  onClick={() => navigate('/register')}
+                  onClick={() => navigate('/chat')}
                   className="flex-1 py-3 px-5 bg-white hover:bg-neutral-200 text-neutral-900 font-bold rounded-xl shadow-sm transition-all text-xs"
                 >
-                  Create Account
+                  Go to Chats
                 </button>
-                <button
-                  onClick={() => navigate('/login')}
-                  className="flex-1 py-3 px-5 bg-[#18181b] hover:bg-[#202024] text-white font-bold rounded-xl border border-neutral-800 transition-all text-xs"
-                >
-                  Sign In
-                </button>
-              </>
-            )}
+              ) : (
+                <>
+                  <button
+                    onClick={() => navigate('/register')}
+                    className="flex-1 py-3 px-5 bg-white hover:bg-neutral-200 text-neutral-900 font-bold rounded-xl shadow-sm transition-all text-xs"
+                  >
+                    Create Account
+                  </button>
+                  <button
+                    onClick={() => navigate('/login')}
+                    className="flex-1 py-3 px-5 bg-[#18181b] hover:bg-[#202024] text-white font-bold rounded-xl border border-neutral-800 transition-all text-xs"
+                  >
+                    Sign In
+                  </button>
+                </>
+              )}
+            </div>
+          </div>
+
+          {/* Features Grid */}
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3.5 w-full max-w-3xl text-left min-w-0">
+            <div className="p-4 bg-[#121215] rounded-2xl border border-neutral-800 space-y-2 shadow-2xs">
+              <Zap className="w-5 h-5 text-emerald-400" />
+              <h3 className="font-bold text-xs text-white">Fast Real-Time Chat</h3>
+              <p className="text-[11px] text-neutral-400 leading-relaxed">
+                Send and receive messages instantly. Delivered reliably even if your contacts are offline.
+              </p>
+            </div>
+
+            <div className="p-4 bg-[#121215] rounded-2xl border border-neutral-800 space-y-2 shadow-2xs">
+              <RefreshCw className="w-5 h-5 text-emerald-400" />
+              <h3 className="font-bold text-xs text-white">Live Multi-Device Sync</h3>
+              <p className="text-[11px] text-neutral-400 leading-relaxed">
+                Chat from your browser or mobile app. All messages stay synchronized across your devices.
+              </p>
+            </div>
+
+            <div className="p-4 bg-[#121215] rounded-2xl border border-neutral-800 space-y-2 shadow-2xs">
+              <Mic className="w-5 h-5 text-emerald-400" />
+              <h3 className="font-bold text-xs text-white">Voice Messages</h3>
+              <p className="text-[11px] text-neutral-400 leading-relaxed">
+                Record and listen to crisp voice notes with realistic waveform visualizer and 1x, 1.5x, 2x speeds.
+              </p>
+            </div>
+
+            <div className="p-4 bg-[#121215] rounded-2xl border border-neutral-800 space-y-2 shadow-2xs">
+              <ImageIcon className="w-5 h-5 text-emerald-400" />
+              <h3 className="font-bold text-xs text-white">Photo & Media Sharing</h3>
+              <p className="text-[11px] text-neutral-400 leading-relaxed">
+                Share photos directly in chat with full screen previews and quick download options.
+              </p>
+            </div>
+
+            <div className="p-4 bg-[#121215] rounded-2xl border border-neutral-800 space-y-2 shadow-2xs">
+              <Trash2 className="w-5 h-5 text-emerald-400" />
+              <h3 className="font-bold text-xs text-white">Private Message Deletion</h3>
+              <p className="text-[11px] text-neutral-400 leading-relaxed">
+                Select one or multiple messages to delete them manually from your side anytime.
+              </p>
+            </div>
+
+            <div className="p-4 bg-[#121215] rounded-2xl border border-neutral-800 space-y-2 shadow-2xs">
+              <Smartphone className="w-5 h-5 text-emerald-400" />
+              <h3 className="font-bold text-xs text-white">Installable Web App</h3>
+              <p className="text-[11px] text-neutral-400 leading-relaxed">
+                Install as a standalone app on your mobile home screen or computer with full-screen access.
+              </p>
+            </div>
+          </div>
+
+          {/* Simple Clean Footer */}
+          <div className="text-[11px] text-neutral-500 pt-4">
+            Aegis Messenger • All rights reserved
           </div>
         </main>
       ) : (

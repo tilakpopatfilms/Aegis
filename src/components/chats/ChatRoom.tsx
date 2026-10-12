@@ -16,7 +16,6 @@ import {
   Download,
   Smile,
   Pin,
-  VolumeX,
   Mic,
   Lock,
 } from 'lucide-react';
@@ -79,7 +78,6 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({ onBack }) => {
     deleteConversationLocally,
     addMessageReaction,
     togglePinConversation,
-    toggleMuteConversation,
   } = useChat();
 
   const [textInput, setTextInput] = useState('');
@@ -668,10 +666,8 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({ onBack }) => {
                     </span>
                   )}
                 </div>
-                <p className="text-[10px] sm:text-[11px] text-[#8696a0] font-mono truncate flex items-center space-x-1">
-                  <span className="truncate">@{otherUser.username}</span>
-                  <span>•</span>
-                  <span className="text-[#00a884] shrink-0">E2EE</span>
+                <p className="text-[10px] sm:text-[11px] text-[#8696a0] truncate">
+                  @{otherUser.username}
                 </p>
               </div>
             </div>
@@ -720,16 +716,6 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({ onBack }) => {
               <Pin className={`w-3.5 h-3.5 ${selectedConversation.isPinned ? 'text-[#00a884] fill-current' : ''}`} />
               <span>{selectedConversation.isPinned ? 'Unpin chat' : 'Pin chat (Max 5)'}</span>
             </button>
-            <button
-              onClick={() => {
-                toggleMuteConversation(selectedConversation.id);
-                setShowOptionsMenu(false);
-              }}
-              className="w-full text-left px-3 py-2 rounded-xl hover:bg-[#2a3942] flex items-center space-x-2 transition-colors"
-            >
-              <VolumeX className={`w-3.5 h-3.5 ${selectedConversation.isMuted ? 'text-rose-400' : ''}`} />
-              <span>{selectedConversation.isMuted ? 'Unmute notifications' : 'Mute chat'}</span>
-            </button>
           </div>
 
           <div className="py-1">
@@ -775,15 +761,6 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({ onBack }) => {
 
       {/* Main Messages Scroll Area (WhatsApp-grade Wallpaper & Screen Fitting) */}
       <div className="flex-1 overflow-y-auto overflow-x-hidden p-2.5 sm:p-4 space-y-2.5 min-h-0 w-full max-w-full bg-[#0b141a] bg-[radial-gradient(#182229_1px,transparent_1px)] [background-size:18px_18px]">
-        {/* WhatsApp-style E2EE Notice Banner */}
-        <div className="text-center py-1.5">
-          <div className="inline-flex items-center space-x-2 px-3 py-1.5 bg-[#182229] border border-[#222e35] rounded-xl text-[10px] sm:text-[11px] text-[#ffd279] shadow-xs max-w-sm mx-auto text-center leading-relaxed">
-            <Lock className="w-3 h-3 text-[#ffd279] shrink-0" />
-            <span>
-              Messages to this chat are end-to-end encrypted. No one outside of this chat can read them.
-            </span>
-          </div>
-        </div>
 
         {/* Message Thread */}
         {messages.map((m) => {

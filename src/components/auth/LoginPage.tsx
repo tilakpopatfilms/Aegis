@@ -62,10 +62,16 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onNavigate }) => {
           <span>Back to Home</span>
         </button>
 
-        <div className="flex items-center space-x-1.5 select-none">
-          <div className="w-6 h-6 rounded-full bg-white text-neutral-900 flex items-center justify-center font-bold text-xs">
-            <Shield className="w-3.5 h-3.5" />
-          </div>
+        <div className="flex items-center space-x-2 select-none">
+          <img
+            src="/pwa-maskable-512x512.png"
+            alt="Aegis"
+            className="w-6 h-6 rounded-lg object-contain"
+            onError={(e) => {
+              (e.target as HTMLImageElement).src =
+                'https://raw.githubusercontent.com/tilakpopatfilms/Aegis/main/public/pwa-maskable-512x512.png';
+            }}
+          />
           <span className="font-bold text-sm tracking-tight text-white">Aegis</span>
         </div>
       </div>
@@ -175,8 +181,8 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onNavigate }) => {
       </div>
 
       {/* Footer Info */}
-      <div className="text-center text-[11px] text-neutral-400">
-        Aegis • Zero Server Plaintext • End-to-End Encrypted
+      <div className="text-center text-[11px] text-neutral-500">
+        Aegis Messenger • All rights reserved
       </div>
     </div>
   );

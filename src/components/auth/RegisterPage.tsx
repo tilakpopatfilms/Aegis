@@ -127,10 +127,16 @@ export const RegisterPage: React.FC<RegisterPageProps> = ({ onNavigate }) => {
           <span>Back to Home</span>
         </button>
 
-        <div className="flex items-center space-x-1.5 select-none">
-          <div className="w-6 h-6 rounded-full bg-white text-neutral-900 flex items-center justify-center font-bold text-xs">
-            <Shield className="w-3.5 h-3.5" />
-          </div>
+        <div className="flex items-center space-x-2 select-none">
+          <img
+            src="/pwa-maskable-512x512.png"
+            alt="Aegis"
+            className="w-6 h-6 rounded-lg object-contain"
+            onError={(e) => {
+              (e.target as HTMLImageElement).src =
+                'https://raw.githubusercontent.com/tilakpopatfilms/Aegis/main/public/pwa-maskable-512x512.png';
+            }}
+          />
           <span className="font-bold text-sm tracking-tight text-white">Aegis</span>
         </div>
       </div>
@@ -146,7 +152,7 @@ export const RegisterPage: React.FC<RegisterPageProps> = ({ onNavigate }) => {
                   Create Account
                 </h1>
                 <p className="text-xs text-neutral-500 dark:text-neutral-400">
-                  Zero-knowledge end-to-end encrypted messaging identity
+                  Fast, multi-device messaging with instant sync
                 </p>
               </div>
 
@@ -288,7 +294,7 @@ export const RegisterPage: React.FC<RegisterPageProps> = ({ onNavigate }) => {
                   disabled={loading}
                   className="w-full py-3 bg-neutral-900 hover:bg-neutral-800 dark:bg-white dark:hover:bg-neutral-200 text-white dark:text-neutral-900 font-bold text-xs rounded-xl transition-all shadow-sm disabled:opacity-50 mt-2"
                 >
-                  {loading ? 'Generating E2EE Cryptographic Keys...' : 'Create Account'}
+                  {loading ? 'Creating Account...' : 'Create Account'}
                 </button>
               </form>
 
@@ -355,8 +361,8 @@ export const RegisterPage: React.FC<RegisterPageProps> = ({ onNavigate }) => {
       </div>
 
       {/* Footer Info */}
-      <div className="text-center text-[11px] text-neutral-400">
-        Aegis • Zero Server Plaintext • End-to-End Encrypted
+      <div className="text-center text-[11px] text-neutral-500">
+        Aegis Messenger • All rights reserved
       </div>
     </div>
   );

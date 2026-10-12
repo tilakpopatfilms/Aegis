@@ -31,25 +31,22 @@ export const Header: React.FC<HeaderProps> = ({ currentPath, onNavigate }) => {
       <div className="max-w-6xl mx-auto flex items-center justify-between">
         {/* Brand identity */}
         <div
-          className="flex items-center space-x-3 cursor-pointer select-none"
+          className="flex items-center space-x-2.5 cursor-pointer select-none"
           onClick={() => {
             selectConversation(null);
             onNavigate(user ? '/chat' : '/home');
           }}
         >
-          <div className="w-8 h-8 rounded-full bg-neutral-900 dark:bg-white text-white dark:text-neutral-900 flex items-center justify-center font-bold">
-            <Shield className="w-4 h-4" />
-          </div>
-          <div>
-            <div className="flex items-center space-x-1.5">
-              <span className="font-bold text-sm tracking-tight">Aegis</span>
-              <span className="text-[10px] font-semibold px-1.5 py-0.2 rounded bg-neutral-100 dark:bg-neutral-800 text-neutral-600 dark:text-neutral-400 border border-neutral-200 dark:border-neutral-700 flex items-center space-x-1">
-                <Lock className="w-2.5 h-2.5 inline" />
-                <span>E2EE</span>
-              </span>
-            </div>
-            <p className="text-[10px] text-neutral-500 font-medium">Private by Design</p>
-          </div>
+          <img
+            src="/pwa-maskable-512x512.png"
+            alt="Aegis"
+            className="w-8 h-8 rounded-xl object-contain shadow-xs"
+            onError={(e) => {
+              (e.target as HTMLImageElement).src =
+                'https://raw.githubusercontent.com/tilakpopatfilms/Aegis/main/public/pwa-maskable-512x512.png';
+            }}
+          />
+          <span className="font-bold text-base tracking-tight text-white">Aegis</span>
         </div>
 
         {/* 3 Main Desktop Navigation Tabs */}

@@ -110,7 +110,7 @@ export const SearchView: React.FC<SearchViewProps> = ({ onSelectUser, onOpenQR }
         <div>
           <h1 className="text-xl font-bold tracking-tight">Search Directory</h1>
           <p className="text-xs text-neutral-500 dark:text-neutral-400">
-            Find contacts live or scan QR codes to start an end-to-end encrypted chat
+            Find contacts live or scan QR codes to start a conversation
           </p>
         </div>
 
