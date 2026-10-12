@@ -131,7 +131,11 @@ export async function getLocalConversations(userUid?: string): Promise<Conversat
   const list = await db.getAll('conversations');
   const deletedSet = await getDeletedConversationIds();
   const filtered = list.filter((c) => {
-    if (deletedSet.has(c.id)) return false;
+    if (deletedSet.has(c.id)) {
+      if (!c.lastMessageText && !c.lastMessageTime) return false;
+      // If conversation has active messages, unmark it as deleted so user sees it!
+      unmarkConversationAsDeleted(c.id).catch(() => {});
+    }
     if (userUid && c.participants && !c.participants.includes(userUid)) return false;
     return true;
   });
@@ -140,8 +144,6 @@ export async function getLocalConversations(userUid?: string): Promise<Conversat
 
 export async function getLocalConversation(id: string): Promise<Conversation | undefined> {
   const db = await getLocalDB();
-  const isDeleted = await isConversationDeleted(id);
-  if (isDeleted) return undefined;
   return db.get('conversations', id);
 }
 
@@ -172,16 +174,36 @@ export async function unmarkConversationAsDeleted(id: string): Promise<void> {
   await db.delete('deletedConversations', id);
 }
 
-export async function isConversationDeleted(id: string): Promise<boolean> {
+export async function isConversationDeleted(id: string, compareTimeIso?: string): Promise<boolean> {
+  const db = await getLocalDB();
+  const entry = await db.get('deletedConversations', id);
+
+  // If cloud has activity (messages or conversation update) newer than local delete, auto-revive immediately!
+  if (entry && entry.deletedAt && compareTimeIso) {
+    const deletedTime = new Date(entry.deletedAt).getTime();
+    const cloudTime = new Date(compareTimeIso).getTime();
+    if (cloudTime > deletedTime) {
+      await unmarkConversationAsDeleted(id);
+      return false;
+    }
+    return true;
+  }
+
+  if (entry) return true;
+
   try {
     const raw = localStorage.getItem('aegis_deleted_convs') || '[]';
     const arr: string[] = JSON.parse(raw);
-    if (arr.includes(id)) return true;
+    if (arr.includes(id)) {
+      if (compareTimeIso) {
+        await unmarkConversationAsDeleted(id);
+        return false;
+      }
+      return true;
+    }
   } catch (e) {}
 
-  const db = await getLocalDB();
-  const entry = await db.get('deletedConversations', id);
-  return !!entry;
+  return false;
 }
 
 export async function getDeletedConversationIds(): Promise<Set<string>> {
