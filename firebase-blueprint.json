@@ -58,6 +58,7 @@
         "recipientUid": { "type": "string", "maxLength": 128 },
         "ciphertext": { "type": "string", "maxLength": 100000, "description": "Encrypted message payload base64" },
         "ephemeralType": { "type": "string", "enum": ["off", "viewed", "1h", "24h", "7d"] },
+        "reactions": { "type": "object", "description": "Map of emoji to list of UIDs" },
         "createdAt": { "type": "string", "format": "date-time" },
         "expiresAt": { "type": "string", "format": "date-time" }
       },

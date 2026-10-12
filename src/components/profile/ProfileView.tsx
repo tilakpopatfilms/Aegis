@@ -16,6 +16,7 @@ import {
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { PWAInstallButton } from '../pwa/PWAInstallButton';
+import { ImageCropper } from './ImageCropper';
 
 export const ProfileView: React.FC = () => {
   const {
@@ -56,6 +57,7 @@ export const ProfileView: React.FC = () => {
   // Photo Upload
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [photoNotice, setPhotoNotice] = useState<string | null>(null);
+  const [selectedImage, setSelectedImage] = useState<string | null>(null);
 
   if (!profile) return null;
 
@@ -83,14 +85,19 @@ export const ProfileView: React.FC = () => {
       }
 
       const reader = new FileReader();
-      reader.onload = async (event) => {
-        const base64 = event.target?.result as string;
-        await updateProfileData({ photoURL: base64 });
-        setPhotoNotice('Profile photo updated.');
-        setTimeout(() => setPhotoNotice(null), 3000);
+      reader.onload = (event) => {
+        setSelectedImage(event.target?.result as string);
       };
       reader.readAsDataURL(file);
+      e.target.value = '';
     }
+  };
+
+  const handleCropComplete = async (croppedImage: string) => {
+    setSelectedImage(null);
+    await updateProfileData({ photoURL: croppedImage });
+    setPhotoNotice('Profile photo updated.');
+    setTimeout(() => setPhotoNotice(null), 3000);
   };
 
   const handlePasswordSubmit = async (e: React.FormEvent) => {
@@ -513,6 +520,14 @@ export const ProfileView: React.FC = () => {
             </form>
           </div>
         </div>
+      )}
+
+      {selectedImage && (
+        <ImageCropper
+          imageSrc={selectedImage}
+          onCropComplete={handleCropComplete}
+          onCancel={() => setSelectedImage(null)}
+        />
       )}
     </div>
   );

@@ -24,6 +24,7 @@
     "qrcode": "^1.5.4",
     "react": "^19.0.1",
     "react-dom": "^19.0.1",
+    "react-easy-crop": "^6.2.4",
     "tweetnacl": "^1.0.3",
     "tweetnacl-util": "^0.15.1",
     "vite": "^8.3.0"
