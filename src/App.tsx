@@ -43,13 +43,10 @@ const MainApp: React.FC = () => {
   useEffect(() => {
     const handlePopState = () => {
       const p = window.location.pathname;
-      const isAuthenticated = !!localStorage.getItem('aegis_session_uid');
       if (p === '/chats') {
         setCurrentPath('/chat');
-      } else if (isAuthenticated && (p === '/' || p === '/home' || p === '/login' || p === '/register')) {
-        setCurrentPath('/chat');
       } else {
-        setCurrentPath(p === '/' || p === '' ? (isAuthenticated ? '/chat' : '/home') : p);
+        setCurrentPath(p === '/' || p === '' ? (localStorage.getItem('aegis_session_uid') ? '/chat' : '/home') : p);
       }
     };
 

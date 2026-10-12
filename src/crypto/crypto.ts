@@ -257,15 +257,3 @@ export function compressImageFile(file: File): Promise<string> {
   });
 }
 
-// Compute a cryptographic SHA-256 tamper-proof token for Aegis QR verification
-export async function computeAegisQRToken(uid: string, username: string, publicKey: string, origin: string): Promise<string> {
-  const enc = new TextEncoder();
-  const cleanUid = (uid || '').trim().toLowerCase();
-  const cleanUsername = (username || '').trim().toLowerCase();
-  const cleanPub = (publicKey || '').trim();
-  const cleanOrigin = (origin || '').trim();
-  const data = enc.encode(`aegis-qr-auth-v2:${cleanUid}:${cleanUsername}:${cleanPub}:${cleanOrigin}:shield-secure-v3`);
-  const hashBuffer = await crypto.subtle.digest('SHA-256', data);
-  const hashArray = Array.from(new Uint8Array(hashBuffer));
-  return hashArray.map((b) => b.toString(16).padStart(2, '0')).join('').slice(0, 32);
-}
